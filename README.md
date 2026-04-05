@@ -109,6 +109,8 @@ Slack 메시지 → bridge가 wiki 컨텍스트 주입 → claude -p "{wiki cont
 
 ### Slack Bot 설정
 
+[slack-agent-bridge](https://github.com/CYRok90/slack-agent-bridge)를 사용하여 Slack에서 LLM에 접근한다.
+
 1. workspace를 `map init`으로 초기화
 2. slack-agent-bridge의 `.env`에 워크스페이스 경로 설정:
    ```
