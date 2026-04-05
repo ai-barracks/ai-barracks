@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+# map — Multi-AI Platform CLI
+# Usage: map <command> [args]
+#
+# Commands:
+#   init [path]              Initialize a workspace (default: current directory)
+#   start <client> [task]    Start an LLM session with SESSIONS.md tracking
+#   status                   Show active sessions and wiki stats
+#   sync                     Re-inject protocol into CLAUDE.md, GEMINI.md, AGENTS.md
+
+set -euo pipefail
+
+MAP_VERSION="0.1.0"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
+
+# --- Colors ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+log_ok()   { echo -e "${GREEN}[OK]${NC}   $1"; }
+log_info() { echo -e "${CYAN}[INFO]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_err()  { echo -e "${RED}[ERR]${NC}  $1" >&2; }
+
+# ============================================================
+# map init
+# ============================================================
+cmd_init() {
+    local target="${1:-.}"
+    if [ ! -d "$target" ]; then
+        mkdir -p "$target"
+    fi
+    target="$(cd "$target" && pwd)"
+
+    echo -e "${CYAN}Multi-AI Platform v${MAP_VERSION}${NC}"
+    echo "Initializing workspace at: $target"
+    echo ""
+
+    # 1. Create SESSIONS.md
+    if [ ! -f "$target/SESSIONS.md" ]; then
+        cp "$TEMPLATE_DIR/SESSIONS.md" "$target/SESSIONS.md"
+        log_ok "SESSIONS.md created"
+    else
+        log_warn "SESSIONS.md already exists, skipping"
+    fi
+
+    # 2. Create wiki/
+    if [ ! -d "$target/wiki" ]; then
+        mkdir -p "$target/wiki/topics"
+        cp "$TEMPLATE_DIR/wiki/Index.md" "$target/wiki/Index.md"
+        cp "$TEMPLATE_DIR/wiki/Log.md" "$target/wiki/Log.md"
+        log_ok "wiki/ directory created (Index.md, Log.md, topics/)"
+    else
+        log_warn "wiki/ already exists, skipping"
+    fi
+
+    # 3. Add .gitignore entry for SESSIONS.md
+    if [ -f "$target/.gitignore" ]; then
+        if ! grep -q "^SESSIONS.md$" "$target/.gitignore"; then
+            echo -e "\n# LLM session registry (ephemeral)\nSESSIONS.md" >> "$target/.gitignore"
+            log_ok "Added SESSIONS.md to .gitignore"
+        fi
+    else
+        echo -e "# LLM session registry (ephemeral)\nSESSIONS.md" > "$target/.gitignore"
+        log_ok "Created .gitignore with SESSIONS.md"
+    fi
+
+    # 4. Inject protocol into LLM config files
+    inject_protocol "$target"
+
+    echo ""
+    log_ok "Workspace initialized!"
+    echo ""
+    echo "Next steps:"
+    echo "  1. Start a session:  map start claude \"your task\""
+    echo "  2. Check status:     map status"
+    echo "  3. Wiki will grow as your LLM sessions discover knowledge"
+}
+
+# ============================================================
+# Protocol injection
+# ============================================================
+PROTOCOL_MARKER="<!-- MAP:SESSION-MEMORY-PROTOCOL -->"
+PROTOCOL_MARKER_END="<!-- MAP:END -->"
+
+inject_protocol() {
+    local target="$1"
+    local protocol_file="$TEMPLATE_DIR/session-memory-protocol.md"
+
+    for config_file in CLAUDE.md GEMINI.md AGENTS.md; do
+        local fpath="$target/$config_file"
+
+        if [ ! -f "$fpath" ]; then
+            # Create with protocol only
+            { echo "$PROTOCOL_MARKER"; cat "$protocol_file"; echo "$PROTOCOL_MARKER_END"; } > "$fpath"
+            log_ok "Created $config_file with protocol"
+        elif grep -q "$PROTOCOL_MARKER" "$fpath"; then
+            # Replace: keep lines before marker + new block + lines after end marker
+            local tmp="${fpath}.tmp"
+            sed -n "1,/^${PROTOCOL_MARKER}$/{ /^${PROTOCOL_MARKER}$/!p; }" "$fpath" > "$tmp"
+            echo "$PROTOCOL_MARKER" >> "$tmp"
+            cat "$protocol_file" >> "$tmp"
+            echo "$PROTOCOL_MARKER_END" >> "$tmp"
+            sed -n "/^${PROTOCOL_MARKER_END}$/,\${ /^${PROTOCOL_MARKER_END}$/!p; }" "$fpath" >> "$tmp"
+            mv "$tmp" "$fpath"
+            log_ok "Updated protocol in $config_file"
+        else
+            # Append protocol
+            { echo ""; echo "$PROTOCOL_MARKER"; cat "$protocol_file"; echo "$PROTOCOL_MARKER_END"; } >> "$fpath"
+            log_ok "Appended protocol to $config_file"
+        fi
+    done
+}
+
+# ============================================================
+# map start
+# ============================================================
+cmd_start() {
+    local client="${1:-}"
+    local task="${2:-}"
+
+    if [ -z "$client" ]; then
+        log_err "Usage: map start <claude|gemini|codex> [task description]"
+        exit 1
+    fi
+
+    local client_name
+    case "$client" in
+        claude)  client_name="Claude Code" ;;
+        gemini)  client_name="Gemini CLI" ;;
+        codex)   client_name="Codex CLI" ;;
+        *)       log_err "Unknown client: $client (supported: claude, gemini, codex)"; exit 1 ;;
+    esac
+
+    local session_id="${client}-$(date +%Y%m%d-%H%M)"
+    local started="$(date '+%m-%d %H:%M')"
+    local sessions_file="SESSIONS.md"
+
+    # Ensure SESSIONS.md exists
+    if [ ! -f "$sessions_file" ]; then
+        cp "$TEMPLATE_DIR/SESSIONS.md" "$sessions_file"
+    fi
+
+    # Register
+    local task_desc="${task:-진행 중}"
+    echo "| ${session_id} | ${client_name} | ${started} | ${started} | ${task_desc} |" >> "$sessions_file"
+    log_info "Session registered: ${session_id} — ${task_desc}"
+
+    # Trap for cleanup
+    cleanup() {
+        if [ -f "$sessions_file" ]; then
+            local tmp="${sessions_file}.tmp"
+            grep -v "^| ${session_id} " "$sessions_file" > "$tmp" 2>/dev/null || true
+            mv "$tmp" "$sessions_file"
+            log_info "Session unregistered: ${session_id}"
+        fi
+    }
+    trap cleanup EXIT
+
+    # Launch CLI
+    exec "$client"
+}
+
+# ============================================================
+# map status
+# ============================================================
+cmd_status() {
+    echo -e "${CYAN}Multi-AI Platform Status${NC}"
+    echo ""
+
+    # Sessions
+    if [ -f "SESSIONS.md" ]; then
+        local count
+        count=$(grep -c "^|" SESSIONS.md | tail -1)
+        count=$((count - 2))  # subtract header + separator
+        [ "$count" -lt 0 ] && count=0
+        echo -e "Sessions: ${GREEN}${count} active${NC}"
+        if [ "$count" -gt 0 ]; then
+            grep "^|" SESSIONS.md | tail -n +"3"
+        fi
+    else
+        echo -e "Sessions: ${YELLOW}SESSIONS.md not found${NC}"
+    fi
+
+    echo ""
+
+    # Wiki
+    if [ -d "wiki/topics" ]; then
+        local topics
+        topics=$(find wiki/topics -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
+        echo -e "Wiki: ${GREEN}${topics} topics${NC}"
+        if [ -f "wiki/Index.md" ]; then
+            grep "^|" wiki/Index.md | grep -v "Topic\|---" 2>/dev/null || true
+        fi
+    else
+        echo -e "Wiki: ${YELLOW}not initialized${NC}"
+    fi
+}
+
+# ============================================================
+# map sync
+# ============================================================
+cmd_sync() {
+    inject_protocol "."
+    log_ok "Protocol synced to all config files"
+}
+
+# ============================================================
+# Main
+# ============================================================
+case "${1:-}" in
+    init)    shift; cmd_init "$@" ;;
+    start)   shift; cmd_start "$@" ;;
+    status)  cmd_status ;;
+    sync)    cmd_sync ;;
+    version) echo "map v${MAP_VERSION}" ;;
+    -h|--help|help|"")
+        echo "map — Multi-AI Platform CLI v${MAP_VERSION}"
+        echo ""
+        echo "Commands:"
+        echo "  init [path]              Initialize a workspace"
+        echo "  start <client> [task]    Start LLM session with tracking"
+        echo "  status                   Show active sessions and wiki"
+        echo "  sync                     Re-inject protocol into config files"
+        echo "  version                  Show version"
+        ;;
+    *)
+        log_err "Unknown command: $1"
+        echo "Run 'map --help' for usage"
+        exit 1
+        ;;
+esac
