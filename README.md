@@ -8,7 +8,8 @@ Any LLM (Claude, Gemini, Codex) across any interface shares sessions and knowled
 
 ```bash
 # Install (coming soon)
-# brew install multi-ai-platform
+brew tap CYRok90/multi-ai-platform
+brew install multi-ai-platform
 
 # Initialize a workspace
 map init ~/my-project
