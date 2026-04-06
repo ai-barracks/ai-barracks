@@ -57,8 +57,38 @@ ensure_sessions_dir() {
 # --- Stale cleanup (>2h) ---
 cleanup_stale() {
     [ ! -f "SESSIONS.md" ] && return 0
-    # Simple approach: just let stale entries be — next human review cleans up
-    # Full timestamp-based cleanup is complex with BSD date; keep it simple
+    local now_epoch year stale_ids=""
+    now_epoch=$(date +%s)
+    year=$(date +%Y)
+
+    # Find stale session IDs
+    for sid in $(grep "^| [a-z]" "SESSIONS.md" 2>/dev/null | awk -F'|' '{print $2}' | tr -d ' '); do
+        local last_update
+        last_update=$(grep "^| ${sid} " "SESSIONS.md" | awk -F'|' '{print $5}' | tr -d ' ')
+        [ -z "$last_update" ] && continue
+        local epoch
+        epoch=$(date -j -f "%Y-%m-%d %H:%M" "${year}-${last_update}" +%s 2>/dev/null || echo "0")
+        if [ "$epoch" -gt 0 ] && [ $((now_epoch - epoch)) -gt 7200 ]; then
+            stale_ids="${stale_ids} ${sid}"
+            # Mark session file as interrupted
+            if [ -f "sessions/${sid}.md" ]; then
+                sed -i '' 's/^- \*\*Status\*\*: active/- **Status**: interrupted/' "sessions/${sid}.md" 2>/dev/null || true
+                sed -i '' "s/^- \*\*Ended\*\*: (active)/- **Ended**: $(date '+%Y-%m-%d %H:%M') (stale)/" "sessions/${sid}.md" 2>/dev/null || true
+            fi
+        fi
+    done
+
+    # Remove stale entries
+    if [ -n "$stale_ids" ]; then
+        local tmp="SESSIONS.md.tmp"
+        cp "SESSIONS.md" "$tmp"
+        for sid in $stale_ids; do
+            grep -v "^| ${sid} " "$tmp" > "${tmp}.2" 2>/dev/null || true
+            mv "${tmp}.2" "$tmp"
+        done
+        mv "$tmp" "SESSIONS.md"
+        log_info "Cleaned stale sessions:${stale_ids}"
+    fi
     return 0
 }
 
@@ -260,6 +290,20 @@ cmd_hook_start() {
         echo "MAP_SESSION_ID=${session_id}" >> "$CLAUDE_ENV_FILE"
     fi
 
+    # Check for previous sessions with empty Wiki Extractions
+    for prev_file in $(ls -t sessions/*.md 2>/dev/null | head -5); do
+        [ "$prev_file" = "sessions/${session_id}.md" ] && continue
+        if grep -q "## Wiki Extractions" "$prev_file" && ! grep -A1 "## Wiki Extractions" "$prev_file" | grep -q "^- "; then
+            local prev_status
+            prev_status=$(grep "^\- \*\*Status\*\*:" "$prev_file" | sed 's/.*: //' || true)
+            if [ "$prev_status" = "completed" ] || [ "$prev_status" = "interrupted" ]; then
+                echo "[MAP] Previous session $(basename "$prev_file" .md) has no Wiki Extractions."
+                echo "[MAP] Review it and extract wiki-worthy knowledge if any."
+                echo ""
+            fi
+        fi
+    done
+
     # Output other active/recent sessions for LLM context (stdout → LLM)
     local other_sessions
     other_sessions=$(grep "^| " "SESSIONS.md" | grep -v "Session ID\|---\|${session_id}" || true)
@@ -312,14 +356,27 @@ cmd_hook_end() {
     if [ -f "$ctx_file" ]; then
         sed -i '' 's/^- \*\*Status\*\*: active/- **Status**: completed/' "$ctx_file" 2>/dev/null || true
         sed -i '' "s/^- \*\*Ended\*\*: (active)/- **Ended**: $(date '+%Y-%m-%d %H:%M')/" "$ctx_file" 2>/dev/null || true
-        log_info "Session marked completed: ${ctx_file}"
 
-        # Prompt LLM to extract wiki knowledge (stdout → LLM)
-        echo ""
-        echo "[MAP] Session ended: ${session_id}"
-        echo "[MAP] Review sessions/${session_id}.md and:"
-        echo "[MAP]   1. Extract wiki-worthy knowledge to wiki/topics/"
-        echo "[MAP]   2. Fill ## Wiki Extractions in sessions/${session_id}.md"
+        # Auto-generate summary from Log entries
+        local log_count
+        log_count=$(grep -c "^- \[" "$ctx_file" 2>/dev/null || echo "0")
+        local decisions_count
+        decisions_count=$(sed -n '/^## Decisions/,/^## /{/^- /p;}' "$ctx_file" 2>/dev/null | wc -l | tr -d ' ')
+        local blockers_count
+        blockers_count=$(sed -n '/^## Blockers/,/^## /{/^- /p;}' "$ctx_file" 2>/dev/null | wc -l | tr -d ' ')
+        local task
+        task=$(grep "^\- \*\*Task\*\*:" "$ctx_file" | sed 's/.*: //' || echo "unknown")
+
+        # Append auto-summary at the end
+        {
+            echo ""
+            echo "## Summary (auto-generated)"
+            echo "- Task: ${task}"
+            echo "- Log entries: ${log_count}, Decisions: ${decisions_count}, Blockers: ${blockers_count}"
+            echo "- Duration: $(grep '^\- \*\*Started\*\*:' "$ctx_file" | sed 's/.*: //') ~ $(date '+%Y-%m-%d %H:%M')"
+        } >> "$ctx_file"
+
+        log_info "Session marked completed: ${ctx_file} (${log_count} log entries)"
     fi
 }
 

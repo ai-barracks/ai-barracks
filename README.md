@@ -7,21 +7,12 @@ Any LLM (Claude, Gemini, Codex) across any interface shares sessions and knowled
 ## Quick Start
 
 ```bash
-# Install (coming soon)
 brew tap CYRok90/multi-ai-platform
 brew install multi-ai-platform
 
-# Initialize a workspace
-map init ~/my-project
-
-# Start a tracked LLM session
-map start claude "building feature X"
-
-# Check active sessions and wiki
-map status
-
-# Re-sync protocol to config files
-map sync
+map init ~/my-project       # Initialize workspace + auto-configure hooks
+map start claude "my task"  # Or just run `claude` directly (hooks handle it)
+map status                  # Show active sessions and wiki
 ```
 
 ## What it creates
@@ -32,7 +23,7 @@ your-project/
 ├── GEMINI.md        # Protocol injected
 ├── AGENTS.md        # Protocol injected
 ├── SESSIONS.md      # Session index (gitignored)
-├── sessions/        # Session context files (gitignored)
+├── sessions/        # Session history (permanent record)
 │   ├── claude-20260405-2230.md
 │   └── gemini-20260405-2245.md
 └── wiki/            # Persistent knowledge base
@@ -41,24 +32,60 @@ your-project/
     └── topics/      # Individual knowledge pages
 ```
 
-## How it works
+## 3-Layer Architecture
 
-### Session Layer (SESSIONS.md + sessions/)
-- **SESSIONS.md** = index (누가, 언제, 무엇)
-- **sessions/{id}.md** = context (진행상황, 결정, 블로커 상세)
-- Session start: hook이 자동으로 SESSIONS.md 등록 + sessions/ 파일 생성
-- Session end: hook이 자동으로 정리
-- **Cross-CLI handoff**: Claude가 rate limit 걸리면 Gemini가 세션 파일을 읽고 이어받기
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Layer 1: Session Index (SESSIONS.md)                            │
+│  "지금 누가 무엇을 하고 있나" — 실시간 활성 세션 레지스트리           │
+├──────────────────────────────────────────────────────────────────┤
+│  Layer 2: Session History (sessions/*.md)                        │
+│  "그때 무슨 일이 있었나" — 조선실록처럼 영구 보존되는 세션 기록        │
+├──────────────────────────────────────────────────────────────────┤
+│  Layer 3: Memory / Wiki (wiki/)                                  │
+│  "우리가 알고 있는 것" — Karpathy LLM-Wiki 패턴의 장기 지식          │
+└──────────────────────────────────────────────────────────────────┘
+```
 
-### Memory Layer (wiki/)
-- Karpathy-style LLM-maintained wiki ([reference](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f))
-- LLMs discover knowledge during work and write it to topic pages
-- Index.md is the only mandatory read on session start (token-efficient)
-- Topics are loaded selectively, not all at once
+### Layer 1: Session Index (SESSIONS.md)
+- 활성 세션 목록 (누가, 언제, 무엇)
+- Hook이 자동으로 등록/해제
+- 2시간 이상 업데이트 없으면 stale로 자동 정리
 
-### Hooks (v0.2.0)
-`map init`이 CLI별 SessionStart/SessionEnd hook을 자동 설정한다.
-LLM이 프로토콜을 따르지 않아도 hook이 강제로 세션을 관리한다.
+### Layer 2: Session History (sessions/)
+- 세션별 상세 기록: Log (작업 실록), Decisions, Blockers
+- 세션 종료 시 auto-summary 생성
+- **영구 보존** — 나중에 "그때 뭘 했지?" 찾아볼 수 있음
+- Cross-CLI handoff: 다른 CLI가 이전 세션 파일을 읽고 이어받기
+
+### Layer 3: Memory / Wiki (wiki/)
+- [Karpathy LLM-Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 패턴
+- 세션 종료 시 wiki로 추출할 지식을 식별하여 topics/에 저장
+- Index.md만 읽고 필요한 토픽만 선택 로딩 (토큰 효율)
+
+## Session Lifecycle (Hook 기반 자동화)
+
+```
+SessionStart Hook                    세션 진행 중                    SessionEnd Hook
+─────────────────                    ──────────────                  ─────────────────
+┌─ 스크립트가 자동 처리 ─┐           ┌─ LLM이 직접 처리 ─┐          ┌─ 스크립트가 자동 처리 ─┐
+│ 1. Stale 세션 정리     │           │ • Log에 작업 기록  │          │ 1. SESSIONS.md 항목 삭제│
+│ 2. SESSIONS.md 등록    │           │ • Decisions 기록   │          │ 2. Status → completed  │
+│ 3. sessions/{id}.md 생성│          │ • Blockers 기록    │          │ 3. Ended 타임스탬프     │
+│ 4. 이전 세션 미추출 알림 │          │ • wiki 업데이트    │          │ 4. Auto-summary 생성   │
+│ 5. 활성 세션 컨텍스트   │           └────────────────────┘          └─────────────────────────┘
+│    stdout → LLM 주입   │
+└─────────────────────────┘                                          다음 SessionStart에서:
+                                                                     → Wiki Extractions 비어있으면
+                                                                       LLM에게 추출 요청
+```
+
+**핵심 원칙**: hook end는 기계적 정리만, hook start는 LLM 컨텍스트 주입 담당.
+세션 종료 시점에는 LLM이 이미 끝나므로 지적 작업(wiki 추출)은 다음 세션 시작 시 처리.
+
+### Hook 설정
+
+`map init`이 CLI별 hook을 자동 감지 + 설정한다:
 
 | CLI | SessionStart | SessionEnd | 비고 |
 |-----|-------------|-----------|------|
@@ -72,12 +99,8 @@ LLM이 프로토콜을 따르지 않아도 hook이 강제로 세션을 관리한
 # Claude에서 작업 중 rate limit 발생
 # → Gemini에서 이어받기:
 map hook continue claude-20260405-2230
-# → 이전 세션의 Progress, Current State, Blockers가 컨텍스트로 주입됨
+# → 이전 세션의 Log, Decisions, Blockers가 컨텍스트로 주입됨
 ```
-
-### Protocol
-The same protocol is injected into CLAUDE.md, GEMINI.md, and AGENTS.md.
-Every LLM follows identical rules regardless of which client is used.
 
 ## Commands
 
@@ -91,22 +114,22 @@ Every LLM follows identical rules regardless of which client is used.
 | `map status` | Show active sessions and wiki stats |
 | `map sync` | Re-inject protocol into config files |
 
-## Architecture
+## Access Methods
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    Your Workspace                        │
-│  SESSIONS.md + wiki/ + CLAUDE.md + GEMINI.md + AGENTS.md │
+│  SESSIONS.md + sessions/ + wiki/ + CLAUDE/GEMINI/AGENTS  │
 └────────┬──────────────┬──────────────┬──────────────────┘
          │              │              │
     ┌────▼────┐   ┌─────▼─────┐  ┌────▼────┐
     │ Claude  │   │  Gemini   │  │  Codex  │    ← Desktop (CLI)
-    │  Code   │   │   CLI     │  │   CLI   │
+    │  Code   │   │   CLI     │  │   CLI   │      Hook이 자동 처리
     └─────────┘   └───────────┘  └─────────┘
                         │
               ┌─────────▼──────────┐
               │  slack-agent-bridge │              ← Mobile (Slack Bot)
-              │  (Mac Mini daemon)  │
+              │  (Mac Mini daemon)  │                bridge가 프록시 처리
               └─────────┬──────────┘
                         │
               ┌─────────▼──────────┐
@@ -116,42 +139,29 @@ Every LLM follows identical rules regardless of which client is used.
 ```
 
 ### Desktop: CLI 직접 사용
-`map start claude` → CLI가 프로토콜에 따라 SESSIONS.md 등록, wiki 참조, 세션 종료 시 해제.
-대화형 세션이므로 LLM이 직접 파일을 읽고 쓸 수 있다.
+`claude` 실행 → SessionStart hook이 자동으로 세션 등록 + wiki 컨텍스트 주입.
+세션 종료 → SessionEnd hook이 자동으로 정리 + auto-summary 생성.
 
 ### Mobile: Slack Bot 경유
-모바일 디바이스에서는 Slack을 통해 접근한다.
-CLI는 `-p` 모드(원샷 실행)로 동작하므로 LLM이 직접 프로토콜을 따를 수 없다.
-따라서 **bridge가 프로토콜을 대신 처리**한다:
+[slack-agent-bridge](https://github.com/CYRok90/slack-agent-bridge)가 프로토콜을 대신 처리:
 
-1. Slack 스레드 생성 → bridge가 SESSIONS.md에 세션 등록
-2. 메시지 수신 → bridge가 wiki/Index.md + 관련 토픽을 프롬프트에 주입 → CLI `-p` 실행
-3. 응답에서 새 지식 발견 → bridge가 wiki/topics/ 업데이트
-4. 스레드 만료(TTL) → bridge가 SESSIONS.md에서 세션 삭제
+1. Slack 메시지 수신 → SESSIONS.md 등록 + wiki 컨텍스트 프롬프트 주입
+2. CLI `-p` 실행 → 응답 반환
+3. 스레드 만료 → SESSIONS.md 정리
 
+```bash
+# bridge .env 설정
+MAP_WORKSPACE_DIR=/path/to/your/workspace
 ```
-# bridge의 역할 (프로토콜 프록시)
-Slack 메시지 → bridge가 wiki 컨텍스트 주입 → claude -p "{wiki context + user prompt}" → 응답
-```
-
-### Slack Bot 설정
-
-[slack-agent-bridge](https://github.com/CYRok90/slack-agent-bridge)를 사용하여 Slack에서 LLM에 접근한다.
-
-1. workspace를 `map init`으로 초기화
-2. slack-agent-bridge의 `.env`에 워크스페이스 경로 설정:
-   ```
-   MAP_WORKSPACE_DIR=/path/to/your/workspace
-   ```
-3. bridge가 해당 경로의 SESSIONS.md와 wiki/를 관리
 
 ## Design Principles
 
 - **File-based**: No database, no server, no infrastructure
-- **Flat structure**: Everything at project root, no nested config paths
-- **Optimistic concurrency**: Single user, low contention, append-preferred
-- **Graceful degradation**: If an LLM ignores the protocol, nothing breaks
-- **Token-efficient**: Read Index.md (~750 tokens), load only relevant topics
+- **Hook-enforced**: LLM이 프로토콜을 무시해도 hook이 강제 관리
+- **Permanent history**: sessions/는 삭제하지 않는 영구 기록 (조선실록)
+- **Knowledge extraction**: 세션 → wiki 추출로 지식이 누적
+- **Cross-CLI**: 어떤 CLI에서든 이전 세션을 이어받을 수 있음
+- **Token-efficient**: Index.md (~750 tokens)만 필수, 나머지 선택 로딩
 
 ## License
 
