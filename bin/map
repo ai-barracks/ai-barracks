@@ -54,6 +54,71 @@ ensure_sessions_dir() {
     mkdir -p sessions
 }
 
+# --- Strip ANSI codes from raw capture ---
+strip_ansi() {
+    sed 's/\x1B\[[0-9;]*[a-zA-Z]//g; s/\x1B[()][AB012]//g; s/\r//g' "$1" | \
+        grep -v '^[[:space:]]*$' | head -500
+}
+
+# --- Summarize session using LLM ---
+summarize_session() {
+    local session_id="$1"
+    local ctx_file="$2"
+    local raw_file="$3"
+
+    # Strip ANSI and truncate
+    local clean_file="sessions/${session_id}.txt"
+    strip_ansi "$raw_file" > "$clean_file" 2>/dev/null || true
+
+    if [ ! -s "$clean_file" ]; then
+        rm -f "$clean_file" "$raw_file"
+        return 0
+    fi
+
+    # Use claude -p to summarize (cheap, fast)
+    local summary
+    summary=$(claude -p "다음은 AI CLI 세션의 원본 기록이다. 이 세션에서 수행된 작업을 정리하라.
+
+형식:
+## Log
+- [HH:MM] <사용자 요청 요약> → <수행 결과>
+(실제 시간을 추정하여 기록)
+
+## Decisions
+- 주요 결정 사항 (없으면 생략)
+
+## Wiki Extractions
+- {topic}.md — {추출 내용 한 줄} (wiki에 남길 지식이 없으면 \"(없음)\")
+
+원본 기록:
+$(head -300 "$clean_file")" --output-format text --model claude-sonnet-4-6 2>/dev/null || true)
+
+    if [ -n "$summary" ]; then
+        # Replace empty sections in session file with LLM summary
+        local tmp="${ctx_file}.tmp"
+        # Keep header, replace from ## Log onwards
+        sed -n '1,/^## Log/p' "$ctx_file" > "$tmp"
+        echo "$summary" | sed -n '/^## Log/,$ p' | tail -n +2 >> "$tmp" 2>/dev/null || true
+
+        # Append auto-summary
+        local log_count
+        log_count=$(grep -c "^- \[" "$tmp" 2>/dev/null || echo "0")
+        {
+            echo ""
+            echo "## Summary (auto-generated)"
+            echo "- Source: LLM summarization of raw session capture"
+            echo "- Log entries: ${log_count}"
+            echo "- Duration: $(grep '^\- \*\*Started\*\*:' "$ctx_file" | sed 's/.*: //') ~ $(date '+%Y-%m-%d %H:%M')"
+        } >> "$tmp"
+
+        mv "$tmp" "$ctx_file"
+        log_info "Session summarized: ${log_count} log entries extracted"
+    fi
+
+    # Cleanup raw files
+    rm -f "$raw_file" "$clean_file"
+}
+
 # --- Stale cleanup (>2h) ---
 cleanup_stale() {
     [ ! -f "SESSIONS.md" ] && return 0
@@ -370,27 +435,32 @@ cmd_hook_end() {
     if [ -f "$ctx_file" ]; then
         sed -i '' 's/^- \*\*Status\*\*: active/- **Status**: completed/' "$ctx_file" 2>/dev/null || true
         sed -i '' "s/^- \*\*Ended\*\*: (active)/- **Ended**: $(date '+%Y-%m-%d %H:%M')/" "$ctx_file" 2>/dev/null || true
+        log_info "Session marked completed: ${ctx_file}"
 
-        # Auto-generate summary from Log entries
-        local log_count
-        log_count=$(grep -c "^- \[" "$ctx_file" 2>/dev/null || echo "0")
-        local decisions_count
-        decisions_count=$(sed -n '/^## Decisions/,/^## /{/^- /p;}' "$ctx_file" 2>/dev/null | wc -l | tr -d ' ')
-        local blockers_count
-        blockers_count=$(sed -n '/^## Blockers/,/^## /{/^- /p;}' "$ctx_file" 2>/dev/null | wc -l | tr -d ' ')
-        local task
-        task=$(grep "^\- \*\*Task\*\*:" "$ctx_file" | sed 's/.*: //' || echo "unknown")
+        # Summarize from transcript (Claude) or raw capture (Gemini/Codex)
+        local raw_file=""
+        if [ "$client" = "claude" ] && [ -n "${CLAUDE_TRANSCRIPT_PATH:-}" ] && [ -f "${CLAUDE_TRANSCRIPT_PATH}" ]; then
+            raw_file="${CLAUDE_TRANSCRIPT_PATH}"
+            log_info "Using Claude transcript: ${raw_file}"
+        elif [ -f "sessions/${session_id}.raw" ]; then
+            raw_file="sessions/${session_id}.raw"
+            log_info "Using raw capture: ${raw_file}"
+        fi
 
-        # Append auto-summary at the end
-        {
-            echo ""
-            echo "## Summary (auto-generated)"
-            echo "- Task: ${task}"
-            echo "- Log entries: ${log_count}, Decisions: ${decisions_count}, Blockers: ${blockers_count}"
-            echo "- Duration: $(grep '^\- \*\*Started\*\*:' "$ctx_file" | sed 's/.*: //') ~ $(date '+%Y-%m-%d %H:%M')"
-        } >> "$ctx_file"
-
-        log_info "Session marked completed: ${ctx_file} (${log_count} log entries)"
+        if [ -n "$raw_file" ] && [ -s "$raw_file" ]; then
+            summarize_session "$session_id" "$ctx_file" "$raw_file"
+        else
+            # No raw data — just append basic summary
+            local log_count
+            log_count=$(grep -c "^- \[" "$ctx_file" 2>/dev/null || echo "0")
+            {
+                echo ""
+                echo "## Summary (auto-generated)"
+                echo "- Log entries: ${log_count}"
+                echo "- Duration: $(grep '^\- \*\*Started\*\*:' "$ctx_file" | sed 's/.*: //') ~ $(date '+%Y-%m-%d %H:%M')"
+                echo "- Note: no raw capture available for LLM summarization"
+            } >> "$ctx_file"
+        fi
     fi
 }
 
@@ -463,24 +533,48 @@ cmd_start() {
         -e "s|{{TASK}}|${task_desc}|g" \
         "$TEMPLATE_DIR/session-context.md" > "$ctx_file"
 
+    local raw_file="sessions/${session_id}.raw"
+
     log_info "Session registered: ${session_id} — ${task_desc}"
     log_info "Context file: ${ctx_file}"
+    log_info "Raw capture: ${raw_file}"
 
-    # Trap for cleanup
+    # Trap for cleanup + summarization
     cleanup() {
+        # 1. Unregister from SESSIONS.md
         if [ -f "SESSIONS.md" ]; then
             local tmp="SESSIONS.md.tmp"
             grep -v "^| ${session_id} " "SESSIONS.md" > "$tmp" 2>/dev/null || true
             mv "$tmp" "SESSIONS.md"
         fi
+        rm -f "sessions/.active"
+
+        # 2. Mark completed
         if [ -f "$ctx_file" ]; then
             sed -i '' 's/^- \*\*Status\*\*: active/- **Status**: completed/' "$ctx_file" 2>/dev/null || true
+            sed -i '' "s/^- \*\*Ended\*\*: (active)/- **Ended**: $(date '+%Y-%m-%d %H:%M')/" "$ctx_file" 2>/dev/null || true
         fi
+
+        # 3. Summarize raw capture with LLM
+        if [ -f "$raw_file" ] && [ -s "$raw_file" ]; then
+            log_info "Summarizing session with LLM..."
+            summarize_session "$session_id" "$ctx_file" "$raw_file"
+        fi
+
         log_info "Session unregistered: ${session_id}"
     }
     trap cleanup EXIT
 
-    exec "$client"
+    # Write active session marker
+    echo "${session_id}" > "sessions/.active"
+
+    # Launch CLI with script capture (Gemini/Codex)
+    # Claude uses $CLAUDE_TRANSCRIPT_PATH instead (handled in hook end)
+    if [ "$client" = "claude" ]; then
+        exec "$client"
+    else
+        script -q "$raw_file" "$client"
+    fi
 }
 
 # ============================================================
