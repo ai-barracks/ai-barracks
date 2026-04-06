@@ -290,6 +290,9 @@ cmd_hook_start() {
         echo "MAP_SESSION_ID=${session_id}" >> "$CLAUDE_ENV_FILE"
     fi
 
+    # Write active session marker (LLM reads this via protocol in CLAUDE.md)
+    echo "${session_id}" > "sessions/.active"
+
     # === LLM Context Injection (stdout → LLM) ===
     echo "[MAP SESSION] Your session file: sessions/${session_id}.md"
     echo "[MAP SESSION] You MUST update this file during work:"
@@ -359,6 +362,7 @@ cmd_hook_end() {
     local tmp="SESSIONS.md.tmp"
     grep -v "^| ${session_id} " "SESSIONS.md" > "$tmp" 2>/dev/null || true
     mv "$tmp" "SESSIONS.md"
+    rm -f "sessions/.active"
     log_info "Session unregistered: ${session_id}"
 
     # Update session file status

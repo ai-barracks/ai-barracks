@@ -8,10 +8,12 @@
 SESSIONS.md 등록/해제와 sessions/ 파일 생성은 hook이 자동 처리한다.
 LLM의 핵심 의무는 **sessions/{MAP_SESSION_ID}.md 파일을 업데이트하는 것**이다.
 
-### 세션 시작 (hook이 자동 처리)
-- SESSIONS.md에 항목 추가
-- `sessions/{id}.md` 파일 생성
-- LLM 컨텍스트에 세션 파일 경로 주입
+### 세션 시작 — LLM이 반드시 수행할 것 (CRITICAL)
+Hook이 SESSIONS.md 등록과 세션 파일 생성을 자동 처리한다.
+LLM은 세션 시작 시 반드시 다음을 수행한다:
+1. `sessions/.active` 파일을 읽어 현재 세션 ID를 확인
+2. `sessions/{세션ID}.md` 파일을 읽어 자신의 세션 파일을 인지
+3. 첫 사용자 메시지 후 **Task** 필드를 실제 작업 내용으로 업데이트
 
 ### 세션 중 — LLM이 반드시 수행할 것 (CRITICAL)
 1. 첫 사용자 메시지 후 `sessions/{id}.md`의 **Task** 필드를 실제 작업 내용으로 업데이트
