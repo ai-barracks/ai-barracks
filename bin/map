@@ -528,20 +528,23 @@ cmd_council() {
         exit 1
     fi
 
-    # Locate council.sh
+    # Locate council.sh (priority: env > workspace-local > brew-installed > fallback)
     local council_script=""
+    local script_dir
+    script_dir="$(cd "$(dirname "$0")" && pwd)"
     if [ -n "${MAP_COUNCIL_SCRIPT:-}" ] && [ -x "$MAP_COUNCIL_SCRIPT" ]; then
         council_script="$MAP_COUNCIL_SCRIPT"
     elif [ -x "./scripts/council.sh" ]; then
         council_script="./scripts/council.sh"
-    elif [ -x "$HOME/Develop/rakku-workspace/scripts/council.sh" ]; then
-        council_script="$HOME/Develop/rakku-workspace/scripts/council.sh"
+    elif [ -x "${script_dir}/../scripts/council.sh" ]; then
+        council_script="${script_dir}/../scripts/council.sh"
+    elif [ -x "${script_dir}/../share/multi-ai-platform/scripts/council.sh" ]; then
+        council_script="${script_dir}/../share/multi-ai-platform/scripts/council.sh"
     fi
 
     if [ -z "$council_script" ]; then
-        log_err "council.sh not found. Set MAP_COUNCIL_SCRIPT or place council.sh at ./scripts/council.sh"
-        echo "" >&2
-        echo "Download: https://github.com/CYRok90/rakku-workspace/blob/main/scripts/council.sh" >&2
+        log_err "council.sh not found."
+        echo "  Reinstall: brew reinstall multi-ai-platform" >&2
         exit 1
     fi
 

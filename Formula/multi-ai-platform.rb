@@ -8,6 +8,7 @@ class MultiAiPlatform < Formula
   def install
     bin.install "bin/map"
     pkgshare.install "templates"
+    pkgshare.install "scripts"
 
     # Patch template dir path in the map script
     inreplace bin/"map", /^TEMPLATE_DIR=.*$/, "TEMPLATE_DIR=\"#{pkgshare}/templates\""
