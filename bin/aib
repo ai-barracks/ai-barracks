@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-AIB_VERSION="0.6.0"
+AIB_VERSION="0.7.0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 
@@ -378,21 +378,49 @@ inject_protocol() {
         local fpath="$target/$config_file"
 
         if [ ! -f "$fpath" ]; then
+            # New file: create with protocol
             { echo "$PROTOCOL_MARKER"; cat "$protocol_file"; echo "$PROTOCOL_MARKER_END"; } > "$fpath"
             log_ok "Created $config_file with protocol"
-        elif grep -q "$PROTOCOL_MARKER" "$fpath"; then
-            local tmp="${fpath}.tmp"
-            sed -n "1,/^${PROTOCOL_MARKER}$/{ /^${PROTOCOL_MARKER}$/!p; }" "$fpath" > "$tmp"
-            echo "$PROTOCOL_MARKER" >> "$tmp"
-            cat "$protocol_file" >> "$tmp"
-            echo "$PROTOCOL_MARKER_END" >> "$tmp"
-            sed -n "/^${PROTOCOL_MARKER_END}$/,\${ /^${PROTOCOL_MARKER_END}$/!p; }" "$fpath" >> "$tmp"
-            mv "$tmp" "$fpath"
-            log_ok "Updated protocol in $config_file"
-        else
-            { echo ""; echo "$PROTOCOL_MARKER"; cat "$protocol_file"; echo "$PROTOCOL_MARKER_END"; } >> "$fpath"
-            log_ok "Appended protocol to $config_file"
+            continue
         fi
+
+        # Normalize legacy MAP: markers
+        sed -i '' 's/<!-- MAP:SESSION-MEMORY-PROTOCOL -->/<!-- AIB:SESSION-MEMORY-PROTOCOL -->/' "$fpath" 2>/dev/null || true
+        sed -i '' 's/<!-- MAP:END -->/<!-- AIB:END -->/' "$fpath" 2>/dev/null || true
+
+        # Extract user content (everything outside marker blocks and orphaned protocol)
+        local user_content
+        user_content=$(awk -v sm="$PROTOCOL_MARKER" -v em="$PROTOCOL_MARKER_END" '
+            BEGIN { skip=0; seen_start=0; buf_len=0 }
+            $0 == sm { skip=1; seen_start=1; next }
+            $0 == em {
+                if (!seen_start) { delete buf; buf_len=0 }
+                skip=0; seen_start=0; next
+            }
+            !skip {
+                if (!seen_start) { buf[++buf_len] = $0 }
+                else {
+                    for (i=1; i<=buf_len; i++) print buf[i]
+                    delete buf; buf_len=0
+                    print
+                }
+            }
+            END { for (i=1; i<=buf_len; i++) print buf[i] }
+        ' "$fpath" | sed '/./,$!d')
+
+        # Rebuild: user content + protocol block
+        local tmp="${fpath}.tmp"
+        if [ -n "$user_content" ]; then
+            echo "$user_content" > "$tmp"
+            echo "" >> "$tmp"
+        else
+            : > "$tmp"
+        fi
+        echo "$PROTOCOL_MARKER" >> "$tmp"
+        cat "$protocol_file" >> "$tmp"
+        echo "$PROTOCOL_MARKER_END" >> "$tmp"
+        mv "$tmp" "$fpath"
+        log_ok "Updated protocol in $config_file"
     done
 }
 
@@ -836,11 +864,252 @@ route_to_barrack() {
 }
 
 # ============================================================
-# aib sync
+# aib sync [--dry-run] [path]
 # ============================================================
+
+# Sync: create missing scaffold files from templates
+sync_new_files() {
+    local target="$1" dry_run="$2"
+    local manifest="$TEMPLATE_DIR/.sync-manifest"
+    local ws_name
+    ws_name=$(basename "$target")
+
+    # Collect scaffold files from manifest
+    while IFS=: read -r file strategy; do
+        [[ "$file" =~ ^#.*$ || -z "$file" ]] && continue
+        [ "$strategy" != "scaffold" ] && continue
+
+        local dest="$target/$file"
+        if [ ! -f "$dest" ]; then
+            if $dry_run; then
+                log_info "[dry-run] Would create: $file (from template)"
+            else
+                mkdir -p "$(dirname "$dest")"
+                sed "s|{{WORKSPACE_NAME}}|${ws_name}|g; s|{{AIB_VERSION}}|${AIB_VERSION}|g" \
+                    "$TEMPLATE_DIR/$file" > "$dest"
+                log_ok "Created: $file"
+            fi
+        else
+            log_info "Skip: $file (already exists)"
+        fi
+    done < "$manifest"
+
+    # Also check for template files NOT in manifest — default to scaffold
+    while IFS= read -r tpl_file; do
+        local rel="${tpl_file#$TEMPLATE_DIR/}"
+        [[ "$rel" == .sync-manifest ]] && continue
+        grep -q "^${rel}:" "$manifest" 2>/dev/null && continue
+
+        local dest="$target/$rel"
+        if [ ! -f "$dest" ]; then
+            if $dry_run; then
+                log_info "[dry-run] Would create: $rel (new template, not in manifest)"
+            else
+                mkdir -p "$(dirname "$dest")"
+                sed "s|{{WORKSPACE_NAME}}|${ws_name}|g; s|{{AIB_VERSION}}|${AIB_VERSION}|g" \
+                    "$TEMPLATE_DIR/$rel" > "$dest"
+                log_ok "Created: $rel (new template)"
+            fi
+        fi
+    done < <(find "$TEMPLATE_DIR" -type f -not -name '.sync-manifest')
+}
+
+# Sync: ensure H2 sections from template exist in barrack file
+sync_sections_md() {
+    local target="$1" dry_run="$2"
+    local manifest="$TEMPLATE_DIR/.sync-manifest"
+
+    while IFS=: read -r file strategy; do
+        [[ "$file" =~ ^#.*$ || -z "$file" ]] && continue
+        [ "$strategy" != "sections" ] && continue
+
+        local dest="$target/$file"
+        local tpl="$TEMPLATE_DIR/$file"
+
+        if [ ! -f "$dest" ]; then
+            log_warn "$file: not found, skipping section sync"
+            continue
+        fi
+
+        # For SOUL.md: check for AIB markers
+        if [ "$file" = "SOUL.md" ] && ! grep -q "AIB:SOUL" "$dest"; then
+            log_warn "$file: no AIB markers found, skipping section sync"
+            continue
+        fi
+
+        # Extract H2 headings from template and barrack
+        local missing_sections=""
+        while IFS= read -r heading; do
+            if ! grep -qF "$heading" "$dest"; then
+                missing_sections="${missing_sections}${heading}\n"
+            fi
+        done < <(grep "^## " "$tpl")
+
+        if [ -z "$missing_sections" ]; then
+            log_info "Skip: $file (all sections present)"
+            continue
+        fi
+
+        if $dry_run; then
+            echo -e "$missing_sections" | while IFS= read -r h; do
+                [ -z "$h" ] && continue
+                log_info "[dry-run] Would add to $file: $h"
+            done
+            continue
+        fi
+
+        # Insert missing sections
+        if [ "$file" = "SOUL.md" ] && grep -q "AIB:SOUL:END" "$dest"; then
+            # Insert before <!-- AIB:SOUL:END -->
+            local tmp="${dest}.tmp"
+            local insert=""
+            while IFS= read -r h; do
+                [ -z "$h" ] && continue
+                insert="${insert}\n${h}\n"
+            done < <(echo -e "$missing_sections")
+            sed "/<!-- AIB:SOUL:END -->/i\\
+${insert}" "$dest" > "$tmp"
+            mv "$tmp" "$dest"
+        else
+            # Append at EOF
+            echo -e "$missing_sections" | while IFS= read -r h; do
+                [ -z "$h" ] && continue
+                echo "" >> "$dest"
+                echo "$h" >> "$dest"
+            done
+        fi
+        log_ok "Updated: $file (added missing sections)"
+    done < "$manifest"
+}
+
+# Sync: merge missing top-level YAML keys into agent.yaml
+sync_yaml_fields() {
+    local target="$1" dry_run="$2"
+    local dest="$target/agent.yaml"
+    local tpl="$TEMPLATE_DIR/agent.yaml"
+
+    if [ ! -f "$dest" ]; then
+        log_warn "agent.yaml: not found, skipping field merge"
+        return
+    fi
+
+    local added=false
+    while IFS= read -r line; do
+        # Match top-level keys (no leading whitespace, has colon)
+        if [[ "$line" =~ ^([a-z_]+): ]]; then
+            local key="${BASH_REMATCH[1]}"
+            if ! grep -q "^${key}:" "$dest"; then
+                if $dry_run; then
+                    log_info "[dry-run] Would add to agent.yaml: $key"
+                else
+                    echo "" >> "$dest"
+                    echo "$line" >> "$dest"
+                    # Append indented children if any
+                    local in_block=false
+                    while IFS= read -r child; do
+                        if [[ "$child" =~ ^[[:space:]] ]]; then
+                            echo "$child" >> "$dest"
+                        else
+                            break
+                        fi
+                    done
+                    added=true
+                fi
+            fi
+        fi
+    done < "$tpl"
+
+    if $added; then
+        log_ok "Updated: agent.yaml (added missing fields)"
+    else
+        if ! $dry_run; then
+            log_info "Skip: agent.yaml (all fields present)"
+        fi
+    fi
+}
+
+# Sync: stamp aib_version in agent.yaml
+sync_version_stamp() {
+    local target="$1" dry_run="$2"
+    local dest="$target/agent.yaml"
+
+    if [ ! -f "$dest" ]; then
+        return
+    fi
+
+    if grep -q "^aib_version:" "$dest"; then
+        local current
+        current=$(grep "^aib_version:" "$dest" | sed 's/^aib_version: *//')
+        if [ "$current" = "$AIB_VERSION" ]; then
+            log_info "Skip: aib_version already $AIB_VERSION"
+            return
+        fi
+        if $dry_run; then
+            log_info "[dry-run] Would update aib_version: $current → $AIB_VERSION"
+        else
+            sed -i '' "s/^aib_version: .*/aib_version: ${AIB_VERSION}/" "$dest"
+            log_ok "Updated: aib_version $current → $AIB_VERSION"
+        fi
+    else
+        if $dry_run; then
+            log_info "[dry-run] Would add aib_version: $AIB_VERSION to agent.yaml"
+        else
+            echo "" >> "$dest"
+            echo "aib_version: ${AIB_VERSION}" >> "$dest"
+            log_ok "Added: aib_version ${AIB_VERSION}"
+        fi
+    fi
+}
+
 cmd_sync() {
-    inject_protocol "."
-    log_ok "Protocol synced to all config files"
+    local dry_run=false
+    local target=""
+
+    # Parse flags
+    while [[ "${1:-}" == --* ]]; do
+        case "$1" in
+            --dry-run) dry_run=true; shift ;;
+            *) log_err "Unknown flag: $1"; exit 1 ;;
+        esac
+    done
+    target="${1:-.}"
+    target="$(cd "$target" && pwd)"
+
+    # Verify this is a barrack
+    if [ ! -f "$target/agent.yaml" ]; then
+        log_err "Not a barrack directory (no agent.yaml): $target"
+        exit 1
+    fi
+
+    local mode=""
+    $dry_run && mode=" (dry-run)"
+    log_info "Syncing barrack: $(basename "$target")${mode} — aib v${AIB_VERSION}"
+
+    # 1. Protocol injection (existing)
+    if $dry_run; then
+        log_info "[dry-run] Would update protocol in CLAUDE.md, GEMINI.md, AGENTS.md"
+    else
+        inject_protocol "$target"
+    fi
+
+    # 2. Scaffold missing files
+    sync_new_files "$target" "$dry_run"
+
+    # 3. Section guards (SOUL.md, RULES.md)
+    sync_sections_md "$target" "$dry_run"
+
+    # 4. YAML field merge (agent.yaml)
+    sync_yaml_fields "$target" "$dry_run"
+
+    # 5. Version stamp
+    sync_version_stamp "$target" "$dry_run"
+
+    # 6. Update registry metadata
+    if ! $dry_run; then
+        register_barrack "$target"
+    fi
+
+    log_ok "Sync complete${mode}"
 }
 
 # ============================================================
@@ -859,7 +1128,7 @@ case "${1:-}" in
         esac
         ;;
     status)  cmd_status ;;
-    sync)    cmd_sync ;;
+    sync)    shift; cmd_sync "$@" ;;
     council) shift; cmd_council "$@" ;;
     barracks) shift; cmd_barracks "$@" ;;
     version) echo "aib v${AIB_VERSION}" ;;
@@ -874,7 +1143,7 @@ case "${1:-}" in
         echo "  hook continue <session_id>     Continue another CLI's session"
         echo "  barracks [list|remove|route]   Manage registered barracks"
         echo "  status                         Show active sessions and wiki"
-        echo "  sync                           Re-inject protocol into config files"
+        echo "  sync [--dry-run] [path]        Sync templates + protocol to barrack"
         echo "  council [-r N] [-m MODE] \"topic\"  Run multi-LLM debate council"
         echo "  version                        Show version"
         ;;

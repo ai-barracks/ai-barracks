@@ -1,0 +1,18 @@
+# templates/.sync-manifest — Sync strategy per template file
+# Format: <file>:<strategy>
+#
+# Strategies:
+#   scaffold    = create if missing (with {{WORKSPACE_NAME}} substitution if needed)
+#   inject      = marker-based injection into config files (CLAUDE.md, GEMINI.md, AGENTS.md)
+#   runtime     = never copy to barrack (used by aib at runtime only)
+#   sections    = ensure H2 sections from template exist in barrack file
+#   yaml-merge  = add missing top-level YAML keys with default values
+
+agent.yaml:yaml-merge
+SOUL.md:sections
+RULES.md:sections
+wiki/Index.md:scaffold
+wiki/Log.md:scaffold
+session-memory-protocol.md:inject
+session-context.md:runtime
+SESSIONS.md:runtime

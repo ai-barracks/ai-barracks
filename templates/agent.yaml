@@ -22,3 +22,5 @@ skills:
 compliance:
   session_retention: permanent
   wiki_retention: permanent
+
+aib_version: {{AIB_VERSION}}
