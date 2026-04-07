@@ -442,6 +442,13 @@ cmd_hook_start() {
     ensure_sessions_dir
     cleanup_stale
 
+    # Refresh this barrack's metadata in registry (picks up SOUL.md/wiki changes)
+    local barrack_path
+    barrack_path="$(pwd)"
+    if [ -f "$AIB_REGISTRY" ] && jq -e --arg p "$barrack_path" '.[] | select(.path == $p)' "$AIB_REGISTRY" >/dev/null 2>&1; then
+        register_barrack "$barrack_path" 2>/dev/null
+    fi
+
     # Register in SESSIONS.md
     echo "| ${session_id} | ${cname} | ${started_short} | ${started_short} | (starting) |" >> "SESSIONS.md"
     log_info "Session registered: ${session_id}"

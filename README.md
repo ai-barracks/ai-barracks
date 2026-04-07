@@ -76,8 +76,9 @@ SessionStart Hook                    임무 수행 중                     Sessi
 │ 1. Stale 에이전트 정리  │           │ • Log에 작업 기록  │           │ 1. SESSIONS.md 항목 삭제│
 │ 2. SESSIONS.md 등록    │           │ • Decisions 기록   │           │ 2. Status → completed  │
 │ 3. sessions/{id}.md 생성│          │ • Blockers 기록    │           │ 3. Ended 타임스탬프     │
-│ 4. 이전 세션 미추출 알림 │          │ • wiki 업데이트    │           │ 4. Auto-summary 생성   │
-│ 5. 활성 세션 컨텍스트   │           └────────────────────┘           └─────────────────────────┘
+│ 4. 배럭 메타데이터 갱신  │          │ • wiki 업데이트    │           │ 4. Auto-summary 생성   │
+│ 5. 이전 세션 미추출 알림 │          └────────────────────┘           └─────────────────────────┘
+│ 6. 활성 세션 컨텍스트   │
 │    stdout → LLM 주입   │
 └─────────────────────────┘                                           다음 SessionStart에서:
                                                                       → Wiki Extractions 비어있으면
@@ -172,6 +173,7 @@ aib council -m pipeline "Migration strategy"
 ```
 
 메타데이터는 배럭 내 `agent.yaml` (description), `SOUL.md` (expertise), `wiki/Index.md` (topics)에서 자동 추출된다.
+세션 시작 시(`aib hook start`) 현재 배럭의 메타데이터가 자동으로 갱신되므로, SOUL.md나 wiki를 편집하면 다음 세션부터 라우팅에 반영된다.
 
 ```bash
 aib barracks list                  # 등록된 배럭 목록
@@ -265,7 +267,7 @@ brew upgrade ai-barracks            # CLI 업그레이드
 aib barracks list                   # 등록된 배럭 확인
 aib sync --dry-run /path/to/barrack # 변경사항 미리 확인
 aib sync /path/to/barrack           # 적용
-aib barracks refresh                # 메타데이터 재수집
+# 메타데이터는 다음 세션 시작 시 자동 갱신됨 (수동: aib barracks refresh)
 ```
 
 ## GitAgent Compatibility
