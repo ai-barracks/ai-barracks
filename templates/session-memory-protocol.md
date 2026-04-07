@@ -6,7 +6,7 @@
 ## Session Layer (SESSIONS.md + sessions/)
 
 SESSIONS.md 등록/해제와 sessions/ 파일 생성은 hook이 자동 처리한다.
-LLM의 핵심 의무는 **sessions/{MAP_SESSION_ID}.md 파일을 업데이트하는 것**이다.
+LLM의 핵심 의무는 **sessions/{AIB_SESSION_ID}.md 파일을 업데이트하는 것**이다.
 
 ### 세션 시작 — LLM이 반드시 수행할 것 (CRITICAL)
 Hook이 SESSIONS.md 등록과 세션 파일 생성을 자동 처리한다.

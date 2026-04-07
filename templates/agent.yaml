@@ -1,6 +1,6 @@
 name: {{WORKSPACE_NAME}}
 version: 0.1.0
-description: "AI workspace powered by Multi-AI Platform"
+description: "AI workspace powered by AI Barracks"
 
 models:
   primary: claude-opus-4-6
@@ -13,8 +13,8 @@ memory:
   wiki: wiki/
 
 hooks:
-  session_start: "map hook start {client}"
-  session_end: "map hook end {client}"
+  session_start: "aib hook start {client}"
+  session_end: "aib hook end {client}"
 
 skills:
   - council

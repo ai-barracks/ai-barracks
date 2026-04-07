@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# map — Multi-AI Platform CLI v0.2.0
-# Usage: map <command> [args]
+# aib — AI Barracks CLI v0.2.0
+# Usage: aib <command> [args]
 #
 # Commands:
 #   init [path]                    Initialize a workspace + auto-configure hooks
@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-MAP_VERSION="0.5.0"
+AIB_VERSION="0.5.0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 
@@ -158,7 +158,7 @@ cleanup_stale() {
 }
 
 # ============================================================
-# map init (v2 — includes hook auto-registration)
+# aib init (v2 — includes hook auto-registration)
 # ============================================================
 cmd_init() {
     local target="${1:-.}"
@@ -167,7 +167,7 @@ cmd_init() {
     fi
     target="$(cd "$target" && pwd)"
 
-    echo -e "${CYAN}Multi-AI Platform v${MAP_VERSION}${NC}" >&2
+    echo -e "${CYAN}AI Barracks v${AIB_VERSION}${NC}" >&2
     echo "Initializing workspace at: $target" >&2
     echo "" >&2
 
@@ -243,9 +243,9 @@ cmd_init() {
     log_ok "Workspace initialized!"
     echo "" >&2
     echo "Usage:" >&2
-    echo "  map start claude \"your task\"    Start a tracked session" >&2
-    echo "  map status                       Show active sessions" >&2
-    echo "  map hook continue <session_id>   Continue another session" >&2
+    echo "  aib start claude \"your task\"    Start a tracked session" >&2
+    echo "  aib status                       Show active sessions" >&2
+    echo "  aib hook continue <session_id>   Continue another session" >&2
 }
 
 # ============================================================
@@ -258,15 +258,15 @@ configure_hooks() {
     if command -v claude &>/dev/null; then
         local claude_settings="$HOME/.claude/settings.json"
         if [ -f "$claude_settings" ]; then
-            if grep -q "map hook" "$claude_settings" 2>/dev/null; then
+            if grep -q "aib hook" "$claude_settings" 2>/dev/null; then
                 log_warn "Claude hooks already configured"
             else
                 # Use jq to add hooks if available, otherwise inform user
                 if command -v jq &>/dev/null; then
                     local tmp="${claude_settings}.tmp"
                     jq '.hooks = (.hooks // {}) |
-                        .hooks.SessionStart = (.hooks.SessionStart // []) + [{"matcher": "", "hooks": [{"type": "command", "command": "map hook start claude"}]}] |
-                        .hooks.SessionEnd = (.hooks.SessionEnd // []) + [{"matcher": "", "hooks": [{"type": "command", "command": "map hook end claude"}]}]' \
+                        .hooks.SessionStart = (.hooks.SessionStart // []) + [{"matcher": "", "hooks": [{"type": "command", "command": "aib hook start claude"}]}] |
+                        .hooks.SessionEnd = (.hooks.SessionEnd // []) + [{"matcher": "", "hooks": [{"type": "command", "command": "aib hook end claude"}]}]' \
                         "$claude_settings" > "$tmp" && mv "$tmp" "$claude_settings"
                     log_ok "Claude Code hooks configured (SessionStart + SessionEnd)"
                 else
@@ -284,14 +284,14 @@ configure_hooks() {
     if command -v gemini &>/dev/null; then
         local gemini_settings="$HOME/.gemini/settings.json"
         if [ -f "$gemini_settings" ]; then
-            if grep -q "map hook" "$gemini_settings" 2>/dev/null; then
+            if grep -q "aib hook" "$gemini_settings" 2>/dev/null; then
                 log_warn "Gemini hooks already configured"
             else
                 if command -v jq &>/dev/null; then
                     local tmp="${gemini_settings}.tmp"
                     jq '.hooks = (.hooks // {}) |
-                        .hooks.SessionStart = [{"matcher": "startup", "hooks": [{"name": "map-session-start", "type": "command", "command": "map hook start gemini"}]}] |
-                        .hooks.SessionEnd = [{"matcher": "exit", "hooks": [{"name": "map-session-end", "type": "command", "command": "map hook end gemini"}]}]' \
+                        .hooks.SessionStart = [{"matcher": "startup", "hooks": [{"name": "map-session-start", "type": "command", "command": "aib hook start gemini"}]}] |
+                        .hooks.SessionEnd = [{"matcher": "exit", "hooks": [{"name": "map-session-end", "type": "command", "command": "aib hook end gemini"}]}]' \
                         "$gemini_settings" > "$tmp" && mv "$tmp" "$gemini_settings"
                     log_ok "Gemini CLI hooks configured (SessionStart + SessionEnd)"
                 else
@@ -307,7 +307,7 @@ configure_hooks() {
 
     # Codex CLI
     if command -v codex &>/dev/null; then
-        log_warn "Codex CLI: no SessionEnd hook support — use 'map start codex' wrapper for session tracking"
+        log_warn "Codex CLI: no SessionEnd hook support — use 'aib start codex' wrapper for session tracking"
     else
         log_info "Codex CLI not installed, skipping"
     fi
@@ -316,8 +316,8 @@ configure_hooks() {
 # ============================================================
 # Protocol injection
 # ============================================================
-PROTOCOL_MARKER="<!-- MAP:SESSION-MEMORY-PROTOCOL -->"
-PROTOCOL_MARKER_END="<!-- MAP:END -->"
+PROTOCOL_MARKER="<!-- AIB:SESSION-MEMORY-PROTOCOL -->"
+PROTOCOL_MARKER_END="<!-- AIB:END -->"
 
 inject_protocol() {
     local target="$1"
@@ -346,7 +346,7 @@ inject_protocol() {
 }
 
 # ============================================================
-# map hook start <client> — Called by CLI SessionStart hooks
+# aib hook start <client> — Called by CLI SessionStart hooks
 # ============================================================
 cmd_hook_start() {
     local client="${1:-unknown}"
@@ -385,8 +385,8 @@ cmd_hook_start() {
     echo "${session_id}" > "sessions/.active"
 
     # === LLM Context Injection (stdout → LLM) ===
-    echo "[MAP SESSION] Your session file: sessions/${session_id}.md"
-    echo "[MAP SESSION] You MUST update this file during work:"
+    echo "[AIB SESSION] Your session file: sessions/${session_id}.md"
+    echo "[AIB SESSION] You MUST update this file during work:"
     echo "  - Update **Task** field with the actual task description on first user message"
     echo "  - Append to ## Log when completing meaningful work: - [HH:MM] <request> → <result>"
     echo "  - Record key decisions in ## Decisions"
@@ -401,8 +401,8 @@ cmd_hook_start() {
             local prev_status
             prev_status=$(grep "^\- \*\*Status\*\*:" "$prev_file" | sed 's/.*: //' || true)
             if [ "$prev_status" = "completed" ] || [ "$prev_status" = "interrupted" ]; then
-                echo "[MAP] Previous session $(basename "$prev_file" .md) has no Wiki Extractions."
-                echo "[MAP] Review it and extract wiki-worthy knowledge if any."
+                echo "[AIB] Previous session $(basename "$prev_file" .md) has no Wiki Extractions."
+                echo "[AIB] Review it and extract wiki-worthy knowledge if any."
                 echo ""
             fi
         fi
@@ -412,7 +412,7 @@ cmd_hook_start() {
     local other_sessions
     other_sessions=$(grep "^| " "SESSIONS.md" | grep -v "Session ID\|---\|${session_id}" || true)
     if [ -n "$other_sessions" ]; then
-        echo "[MAP] Other active sessions:"
+        echo "[AIB] Other active sessions:"
         echo "$other_sessions"
         echo ""
     fi
@@ -424,7 +424,7 @@ cmd_hook_start() {
         local status
         status=$(grep "^\- \*\*Status\*\*:" "$latest" | head -1 || true)
         if echo "$status" | grep -q "active\|interrupted"; then
-            echo "[MAP] Recent session available for continuation:"
+            echo "[AIB] Recent session available for continuation:"
             echo "  File: $latest"
             head -20 "$latest"
             echo "..."
@@ -435,7 +435,7 @@ cmd_hook_start() {
 }
 
 # ============================================================
-# map hook end <client> — Called by CLI SessionEnd hooks
+# aib hook end <client> — Called by CLI SessionEnd hooks
 # ============================================================
 cmd_hook_end() {
     local client="${1:-unknown}"
@@ -491,13 +491,13 @@ cmd_hook_end() {
 }
 
 # ============================================================
-# map hook continue <session_id> — Continue another session
+# aib hook continue <session_id> — Continue another session
 # ============================================================
 cmd_hook_continue() {
     local target_id="${1:-}"
 
     if [ -z "$target_id" ]; then
-        log_err "Usage: map hook continue <session_id>"
+        log_err "Usage: aib hook continue <session_id>"
         # List available sessions
         echo "Available sessions:" >&2
         ls -t sessions/*.md 2>/dev/null | while read -r f; do
@@ -516,22 +516,22 @@ cmd_hook_continue() {
     fi
 
     # Output full session context (stdout → LLM)
-    echo "[MAP] Continuing session: ${target_id}"
+    echo "[AIB] Continuing session: ${target_id}"
     echo ""
     cat "$ctx_file"
     echo ""
-    echo "[MAP] Please continue the work described above. Update your session file with new progress."
+    echo "[AIB] Please continue the work described above. Update your session file with new progress."
 }
 
 # ============================================================
-# map start <client> [task] — User-facing wrapper
+# aib start <client> [task] — User-facing wrapper
 # ============================================================
 cmd_start() {
     local client="${1:-}"
     local task="${2:-}"
 
     if [ -z "$client" ]; then
-        log_err "Usage: map start <claude|gemini|codex> [task description]"
+        log_err "Usage: aib start <claude|gemini|codex> [task description]"
         exit 1
     fi
 
@@ -604,10 +604,10 @@ cmd_start() {
 }
 
 # ============================================================
-# map status
+# aib status
 # ============================================================
 cmd_status() {
-    echo -e "${CYAN}Multi-AI Platform Status${NC}" >&2
+    echo -e "${CYAN}AI Barracks Status${NC}" >&2
     echo "" >&2
 
     # Sessions
@@ -648,17 +648,17 @@ cmd_status() {
 }
 
 # ============================================================
-# map council [flags] "topic" — Wrapper around council.sh
+# aib council [flags] "topic" — Wrapper around council.sh
 # ============================================================
 cmd_council() {
     if [ $# -eq 0 ]; then
-        log_err "Usage: map council [-r rounds] [-m mode] \"topic\""
+        log_err "Usage: aib council [-r rounds] [-m mode] \"topic\""
         echo "  -r N       Number of debate rounds (default: 2)" >&2
         echo "  -m MODE    Mode: debate|adversarial|pipeline (default: debate)" >&2
         echo "" >&2
         echo "Examples:" >&2
-        echo "  map council \"REST vs gRPC\"" >&2
-        echo "  map council -m adversarial -r 3 \"Kafka vs Pulsar\"" >&2
+        echo "  aib council \"REST vs gRPC\"" >&2
+        echo "  aib council -m adversarial -r 3 \"Kafka vs Pulsar\"" >&2
         exit 1
     fi
 
@@ -666,19 +666,19 @@ cmd_council() {
     local council_script=""
     local script_dir
     script_dir="$(cd "$(dirname "$0")" && pwd)"
-    if [ -n "${MAP_COUNCIL_SCRIPT:-}" ] && [ -x "$MAP_COUNCIL_SCRIPT" ]; then
-        council_script="$MAP_COUNCIL_SCRIPT"
+    if [ -n "${AIB_COUNCIL_SCRIPT:-}" ] && [ -x "$AIB_COUNCIL_SCRIPT" ]; then
+        council_script="$AIB_COUNCIL_SCRIPT"
     elif [ -x "./scripts/council.sh" ]; then
         council_script="./scripts/council.sh"
     elif [ -x "${script_dir}/../scripts/council.sh" ]; then
         council_script="${script_dir}/../scripts/council.sh"
-    elif [ -x "${script_dir}/../share/multi-ai-platform/scripts/council.sh" ]; then
-        council_script="${script_dir}/../share/multi-ai-platform/scripts/council.sh"
+    elif [ -x "${script_dir}/../share/ai-barracks/scripts/council.sh" ]; then
+        council_script="${script_dir}/../share/ai-barracks/scripts/council.sh"
     fi
 
     if [ -z "$council_script" ]; then
         log_err "council.sh not found."
-        echo "  Reinstall: brew reinstall multi-ai-platform" >&2
+        echo "  Reinstall: brew reinstall ai-barracks" >&2
         exit 1
     fi
 
@@ -686,7 +686,7 @@ cmd_council() {
 }
 
 # ============================================================
-# map sync
+# aib sync
 # ============================================================
 cmd_sync() {
     inject_protocol "."
@@ -705,15 +705,15 @@ case "${1:-}" in
             start)    shift; cmd_hook_start "$@" ;;
             end)      shift; cmd_hook_end "$@" ;;
             continue) shift; cmd_hook_continue "$@" ;;
-            *)        log_err "Usage: map hook <start|end|continue> [args]"; exit 1 ;;
+            *)        log_err "Usage: aib hook <start|end|continue> [args]"; exit 1 ;;
         esac
         ;;
     status)  cmd_status ;;
     sync)    cmd_sync ;;
     council) shift; cmd_council "$@" ;;
-    version) echo "map v${MAP_VERSION}" ;;
+    version) echo "aib v${AIB_VERSION}" ;;
     -h|--help|help|"")
-        echo "map — Multi-AI Platform CLI v${MAP_VERSION}"
+        echo "aib — AI Barracks CLI v${AIB_VERSION}"
         echo ""
         echo "Commands:"
         echo "  init [path]                    Initialize workspace + configure hooks"
@@ -728,7 +728,7 @@ case "${1:-}" in
         ;;
     *)
         log_err "Unknown command: $1"
-        echo "Run 'map --help' for usage"
+        echo "Run 'aib --help' for usage"
         exit 1
         ;;
 esac
