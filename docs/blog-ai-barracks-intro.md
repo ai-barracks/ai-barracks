@@ -41,13 +41,20 @@ aib start claude "버그 수정" --skip-permissions  # 에이전트 배치
 
 ```
 your-project/
+├── CLAUDE.md        # 세션 프로토콜 자동 주입 (Claude Code)
+├── GEMINI.md        # 세션 프로토콜 자동 주입 (Gemini CLI)
+├── AGENTS.md        # 세션 프로토콜 자동 주입 (Codex CLI)
+├── agent.yaml       # 배럭 메타데이터 (GitAgent 호환)
 ├── SOUL.md          # 에이전트 정체성 (전문성, 성격, 가치관)
 ├── RULES.md         # 행동 규칙 — 에이전트가 자동으로 학습하여 추가
 ├── GROWTH.md        # 언제 뭘 기록할지 결정 테이블
-├── CLAUDE.md        # 세션 프로토콜 자동 주입
+├── SESSIONS.md      # 활성 세션 인덱스 (gitignored)
 ├── sessions/        # 영구 세션 기록 (조선실록)
+│   ├── .active      # 현재 세션 ID 마커
+│   └── claude-20260408-2202.md
 └── wiki/            # 장기 지식 베이스 (LLM-Wiki)
     ├── Index.md     # 토픽 카탈로그 (~750 토큰)
+    ├── Log.md       # 변경 기록
     └── topics/      # 개별 지식 페이지
 ```
 

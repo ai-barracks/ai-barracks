@@ -26,6 +26,7 @@ your-barrack/
 ├── agent.yaml       # GitAgent spec — barrack metadata
 ├── SOUL.md          # Agent identity / expertise
 ├── RULES.md         # Behavior rules (Must Always/Never/Learned)
+├── GROWTH.md        # Growth triggers — decision table for wiki/RULES updates
 ├── SESSIONS.md      # Session index (gitignored)
 ├── sessions/        # Session history (영구 기록 — 조선실록)
 │   ├── .active      # Current session ID marker
