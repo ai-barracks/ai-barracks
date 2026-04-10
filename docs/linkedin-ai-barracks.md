@@ -54,5 +54,5 @@ CLI로 에이전트를 다루는 분이라면 그대로 쓰시면 되고,
 
 비슷한 고민이 있는 분들에게 참고가 될 수 있어 공유합니다.
 
-CLI: https://github.com/CYRok90/ai-barracks
-CommandCenter: https://github.com/CYRok90/ai-barracks-cc
+CLI: https://github.com/ai-barracks/ai-barracks
+CommandCenter: https://github.com/ai-barracks/ai-barracks-cc

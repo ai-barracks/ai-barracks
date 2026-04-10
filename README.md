@@ -7,7 +7,7 @@ Any LLM (Claude, Gemini, Codex) across any interface shares sessions and knowled
 ## Quick Start
 
 ```bash
-brew tap CYRok90/ai-barracks
+brew tap ai-barracks/ai-barracks
 brew install ai-barracks
 
 aib init ~/my-project       # Initialize barrack + auto-configure hooks
@@ -347,7 +347,7 @@ AIB는 [GitAgent](https://github.com/open-gitagent/gitagent) 표준과 호환된
 
 CLI 외에 데스크톱 앱으로도 배럭을 관제할 수 있다.
 
-[**AI Barracks CommandCenter**](https://github.com/CYRok90/ai-barracks-cc) — Tauri v2 (Rust + React) 기반 macOS 앱.
+[**AI Barracks CommandCenter**](https://github.com/ai-barracks/ai-barracks-cc) — Tauri v2 (Rust + React) 기반 macOS 앱.
 
 - 배럭 목록 + 상태 한눈에 보기
 - 설정 파일 편집: SOUL.md/GROWTH.md 에디터, RULES.md 구조화 UI, agent.yaml 폼 에디터
