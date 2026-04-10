@@ -49,7 +49,7 @@ your-project/
 ├── RULES.md         # 행동 규칙 — 에이전트가 자동으로 학습하여 추가
 ├── GROWTH.md        # 언제 뭘 기록할지 결정 테이블
 ├── SESSIONS.md      # 활성 세션 인덱스 (gitignored)
-├── sessions/        # 영구 세션 기록 (조선실록)
+├── sessions/        # Veritable Records aka 'Silok'
 │   ├── .active      # 현재 세션 ID 마커
 │   └── claude-20260408-2202.md
 └── wiki/            # 장기 지식 베이스 (LLM-Wiki)
@@ -66,7 +66,7 @@ your-project/
 │  "지금 누가 무엇을 하고 있나" — 실시간 에이전트 레지스트리     │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 2: Session History (sessions/*.md)                │
-│  "그때 무슨 일이 있었나" — 조선실록처럼 영구 보존되는 기록     │
+│  "그때 무슨 일이 있었나" — Veritable Records aka 'Silok'    │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 3: Memory / Wiki (wiki/)                         │
 │  "우리가 알고 있는 것" — Karpathy LLM-Wiki 패턴의 장기 지식  │
@@ -77,7 +77,7 @@ your-project/
 
 `SESSIONS.md`는 현재 활성 에이전트 목록입니다. 세션이 시작되면 Hook이 자동으로 등록하고, 끝나면 삭제합니다. 2시간 이상 업데이트 없으면 stale로 정리합니다. 사용자가 건드릴 필요가 없습니다.
 
-### Layer 2: 조선실록
+### Layer 2: Veritable Records aka 'Silok'
 
 세션 기록은 **절대 삭제하지 않습니다**.
 
@@ -95,7 +95,7 @@ your-project/
 - router 매칭 실패 시 None 반환하여 기본 workspace 사용
 ```
 
-나중에 "그때 왜 그렇게 결정했지?"라고 찾아볼 수 있습니다. 조선실록이 500년간 국가의 의사결정을 기록했듯이, 세션 기록은 프로젝트의 의사결정 이력을 영구 보존합니다.
+나중에 "그때 왜 그렇게 결정했지?"라고 찾아볼 수 있습니다. Veritable Records aka 'Silok'이 500년간 국가의 의사결정을 기록했듯이, 세션 기록은 프로젝트의 의사결정 이력을 영구 보존합니다.
 
 ### Layer 3: LLM-Wiki
 

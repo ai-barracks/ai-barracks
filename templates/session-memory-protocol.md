@@ -31,7 +31,7 @@ LLM은 세션 시작 시 반드시 다음을 수행한다:
 
 ## Session History Layer (sessions/)
 
-sessions/{id}.md는 조선실록처럼 세션의 모든 작업을 기록하는 영구 보존 로그다.
+sessions/{id}.md는 Veritable Records aka 'Silok'처럼 세션의 모든 작업을 기록하는 영구 보존 로그다.
 SESSIONS.md가 "지금 누가 무엇을 하고 있나"라면, sessions/*.md는 "그때 무슨 일이 있었나"다.
 
 ### 세션 시작
@@ -52,7 +52,7 @@ SESSIONS.md가 "지금 누가 무엇을 하고 있나"라면, sessions/*.md는 "
 2. 갱신 내역을 `## Wiki Extractions`에 기록 (wiki, RULES.md, Identity Suggestions 모두 포함)
 3. 갱신 없으면 **분류별 사유** 기술 (단순 "(없음)" 금지)
 4. `**Ended**` 필드에 종료 시각 기록
-5. 파일은 삭제하지 않는다 — 실록은 영구 보존
+5. 파일은 삭제하지 않는다 — Veritable Records aka 'Silok'은 영구 보존
 
 ## Memory Layer (wiki/)
 

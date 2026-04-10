@@ -28,7 +28,7 @@ your-barrack/
 ├── RULES.md         # Behavior rules (Must Always/Never/Learned)
 ├── GROWTH.md        # Growth triggers — decision table for wiki/RULES updates
 ├── SESSIONS.md      # Session index (gitignored)
-├── sessions/        # Session history (영구 기록 — 조선실록)
+├── sessions/        # Session history (Veritable Records aka 'Silok')
 │   ├── .active      # Current session ID marker
 │   ├── claude-20260405-2230.md
 │   └── gemini-20260405-2245.md
@@ -75,7 +75,7 @@ your-barrack/
 |------|------|
 | `SESSIONS.md` | Hook이 실시간 관리 — 수동 수정 시 충돌 |
 | `sessions/.active` | 현재 세션 ID 마커 — Hook 전용 |
-| `sessions/{id}.md` | 영구 보존 기록 (조선실록) — 수정 시 이력 훼손 |
+| `sessions/{id}.md` | Veritable Records aka 'Silok' — 영구 보존 — 수정 시 이력 훼손 |
 
 ## 3-Layer Architecture
 
@@ -85,7 +85,7 @@ your-barrack/
 │  "지금 누가 무엇을 하고 있나" — 실시간 활성 에이전트 레지스트리           │
 ├──────────────────────────────────────────────────────────────────┤
 │  Layer 2: Session History (sessions/*.md)                        │
-│  "그때 무슨 일이 있었나" — 조선실록처럼 영구 보존되는 임무 기록           │
+│  "그때 무슨 일이 있었나" — Veritable Records aka 'Silok' — 영구 보존되는 임무 기록           │
 ├──────────────────────────────────────────────────────────────────┤
 │  Layer 3: Memory / Wiki (wiki/)                                  │
 │  "우리가 알고 있는 것" — Karpathy LLM-Wiki 패턴의 장기 지식            │
@@ -98,7 +98,7 @@ your-barrack/
 - 2시간 이상 업데이트 없으면 stale로 자동 정리
 
 ### Layer 2: Session History (sessions/)
-- 세션별 상세 기록: Log (임무 실록), Decisions, Blockers
+- 세션별 상세 기록: Log (Veritable Records aka 'Silok'), Decisions, Blockers
 - 세션 종료 시 auto-summary 생성
 - **영구 보존** — 나중에 "그때 뭘 했지?" 찾아볼 수 있음
 - Cross-CLI handoff: 다른 CLI가 이전 세션 파일을 읽고 이어받기
@@ -378,7 +378,7 @@ CLI 외에 데스크톱 앱으로도 배럭을 관제할 수 있다.
 
 - **File-based**: No database, no server, no infrastructure
 - **Hook-enforced**: LLM이 프로토콜을 무시해도 hook이 강제 관리
-- **Permanent history**: sessions/는 삭제하지 않는 영구 기록 (조선실록)
+- **Permanent history**: sessions/는 삭제하지 않는 Veritable Records aka 'Silok'
 - **Knowledge extraction**: 세션 → wiki 추출로 지식이 누적
 - **Cross-CLI**: 어떤 CLI에서든 이전 에이전트 세션을 이어받을 수 있음
 - **Token-efficient**: Index.md (~750 tokens)만 필수, 나머지 선택 로딩

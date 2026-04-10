@@ -9,7 +9,7 @@
 - **Continues**: (없음)
 
 ## Log
-<!-- Append-only 실록. 의미있는 작업 단위마다 기록. 매 턴마다 기록하지 않는다. -->
+<!-- Append-only Veritable Records aka 'Silok'. 의미있는 작업 단위마다 기록. 매 턴마다 기록하지 않는다. -->
 <!-- Format: - [HH:MM] <사용자 요청 요약> → <수행 결과/상태> -->
 
 ## Decisions
