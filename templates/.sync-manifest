@@ -7,6 +7,7 @@
 #   runtime     = never copy to barrack (used by aib at runtime only)
 #   sections    = ensure H2 sections from template exist in barrack file
 #   yaml-merge  = add missing top-level YAML keys with default values
+#   system      = always overwrite from template (system-owned docs, no user customization)
 
 agent.yaml:yaml-merge
 SOUL.md:sections
@@ -17,3 +18,6 @@ wiki/Log.md:scaffold
 session-memory-protocol.md:inject
 session-context.md:runtime
 SESSIONS.md:runtime
+docs/session-protocol.md:system
+docs/growth-protocol.md:system
+docs/wiki-protocol.md:system

@@ -15,6 +15,8 @@
 | 실수/실패 패턴 발견 | `RULES.md` Learned | "sed 멱등성 문제 → awk 사용" |
 | 같은 지시 2회 이상 반복 | `RULES.md` Learned | 반복되는 건 규칙으로 고착 |
 | 정체성 관련 패턴 (3회+ 같은 영역 작업) | `sessions/{id}.md` § Identity Suggestions | "Expertise에 X 추가 제안" |
+| 실패/오류 발생 | `sessions/{id}.md` § Retries | 실패 내용, 원인 분석, 수정 시도, 결과 |
+| 같은 오류 2회 반복 | `RULES.md` Learned | "X 시 Y 확인 필수" 패턴화 |
 
 **NOT growth-worthy** — 기록하지 않을 것:
 - 단순 git commit, 오타 수정, 파일 이름 변경

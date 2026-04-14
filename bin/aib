@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# aib — AI Barracks CLI v0.8.0
+# aib — AI Barracks CLI v0.9.0
 # Usage: aib <command> [args]
 #
 # Commands:
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-AIB_VERSION="0.8.2"
+AIB_VERSION="0.9.0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 
@@ -501,14 +501,45 @@ cmd_hook_start() {
     echo "    Add domain-specific wiki topic suggestions so the agent knows what to capture."
     echo ""
 
-    # Check for previous sessions with empty Wiki Extractions (carry-over accountability)
+    # === Violation carry-over: remediation injection (v0.9.0, OpenAI pattern) ===
+    for vfile in $(ls -t sessions/*.violations 2>/dev/null | head -3); do
+        local prev_sid
+        prev_sid=$(basename "$vfile" .violations)
+        echo "[AIB VIOLATION] Previous session ${prev_sid} had invariant violations:"
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            echo "  - ${line}"
+        done < "$vfile"
+        echo "[AIB REMEDIATION] Review sessions/${prev_sid}.md and address above issues if relevant."
+        echo ""
+        mv "$vfile" "${vfile}.delivered"
+    done
+
+    # === Blocker carry-over (v0.9.0, self-correction protocol) ===
+    local latest_prev
+    latest_prev=$(ls -t sessions/*.md 2>/dev/null | grep -v "${session_id}" | head -1 || true)
+    if [ -n "$latest_prev" ] && [ -f "$latest_prev" ]; then
+        local prev_blockers
+        prev_blockers=$(sed -n '/^## Blockers/,/^## /{/^<!--/d; /^## /d; /^$/d; p}' "$latest_prev" 2>/dev/null || true)
+        if [ -n "$prev_blockers" ]; then
+            echo "[AIB BLOCKER] Previous session $(basename "$latest_prev" .md) has unresolved blockers:"
+            echo "$prev_blockers"
+            echo "[AIB] Address these if relevant to current work."
+            echo ""
+        fi
+    fi
+
+    # Fallback: check for empty Wiki Extractions (non-violation sessions)
     for prev_file in $(ls -t sessions/*.md 2>/dev/null | head -5); do
         [ "$prev_file" = "sessions/${session_id}.md" ] && continue
+        # Skip if violation file exists/was delivered (already handled above)
+        local prev_base
+        prev_base=$(basename "$prev_file" .md)
+        [ -f "sessions/${prev_base}.violations" ] || [ -f "sessions/${prev_base}.violations.delivered" ] && continue
         if grep -q "## Wiki Extractions" "$prev_file" && ! grep -A1 "## Wiki Extractions" "$prev_file" | grep -q "^- "; then
             local prev_status
             prev_status=$(grep "^\- \*\*Status\*\*:" "$prev_file" | sed 's/.*: //' || true)
             if [ "$prev_status" = "completed" ] || [ "$prev_status" = "interrupted" ]; then
-                # Show specific missed opportunities
                 local prev_decisions
                 prev_decisions=$( (sed -n '/^## Decisions/,/^## /{/^- /p}' "$prev_file" 2>/dev/null || true) | wc -l | tr -d ' ')
                 local prev_logs
@@ -593,6 +624,42 @@ cmd_hook_end() {
                 log_warn "Session ${session_id} had ${log_count} log entries and ${decision_count} decisions but NO growth updates."
                 log_warn "Review: sessions/${session_id}.md"
             fi
+        fi
+
+        # === Invariant Violation Recording (v0.9.0) ===
+        # Record violations to file; next SessionStart injects them as remediation instructions
+        local violations=""
+
+        # Check: Task still "(pending)"
+        local task_field
+        task_field=$(grep "^\- \*\*Task\*\*:" "$ctx_file" | sed 's/.*: //' || true)
+        if [ "$task_field" = "(pending)" ]; then
+            violations="${violations}TASK_PENDING: Task 필드가 업데이트되지 않음. 첫 사용자 메시지 후 반드시 Task를 설정하세요.\n"
+        fi
+
+        # Check: Wiki Extractions — also accept "(없음" classification as valid
+        local has_classification=false
+        if (sed -n '/^## Wiki Extractions/,/^## /{/^(없음/p}' "$ctx_file" 2>/dev/null || true) | grep -q "(없음" 2>/dev/null; then
+            has_classification=true
+        fi
+        if [ "$log_count" -ge 2 ] || [ "$decision_count" -ge 1 ]; then
+            if ! $has_growth && ! $has_classification; then
+                violations="${violations}GROWTH_MISSING: ${log_count} log + ${decision_count} decisions이나 Wiki Extractions가 비어있음. 분류별 사유라도 기술하세요.\n"
+            fi
+        fi
+
+        # Check: Unresolved blockers (carry-over to next session)
+        local blocker_content
+        blocker_content=$(sed -n '/^## Blockers/,/^## /{/^<!--/d; /^## /d; /^$/d; p}' "$ctx_file" 2>/dev/null || true)
+        if [ -n "$blocker_content" ]; then
+            violations="${violations}UNRESOLVED_BLOCKERS: 해소되지 않은 블로커 존재. 다음 세션에서 확인하세요.\n"
+        fi
+
+        # Write violations file if any
+        if [ -n "$violations" ]; then
+            local vfile="sessions/${session_id}.violations"
+            printf '%b' "$violations" > "$vfile"
+            log_warn "Session ${session_id}: violations recorded → ${vfile}"
         fi
 
         # Summarize from transcript (Claude) or raw capture (Gemini/Codex)
@@ -811,6 +878,93 @@ cmd_status() {
 }
 
 # ============================================================
+# aib wiki lint [--fix] — Check wiki health and freshness (v0.9.0)
+# ============================================================
+cmd_wiki_lint() {
+    local fix=false
+    [ "${1:-}" = "--fix" ] && fix=true
+    local issues=0
+    local now_epoch
+    now_epoch=$(date +%s)
+    local six_months=$((180 * 86400))
+
+    echo -e "${CYAN}Wiki Lint Report${NC}" >&2
+    echo "" >&2
+
+    # 1. Staleness: [YYYY-MM-DD] tags older than 6 months
+    if [ -d "wiki/topics" ]; then
+        for f in wiki/topics/*.md; do
+            [ ! -f "$f" ] && continue
+            while IFS= read -r line; do
+                if [[ "$line" =~ \[([0-9]{4}-[0-9]{2}-[0-9]{2})\] ]] && ! echo "$line" | grep -q "\[STALE?\]"; then
+                    local ds="${BASH_REMATCH[1]}"
+                    local ep
+                    ep=$(date -j -f "%Y-%m-%d" "$ds" +%s 2>/dev/null || echo "0")
+                    if [ "$ep" -gt 0 ] && [ $((now_epoch - ep)) -gt "$six_months" ]; then
+                        echo -e "  ${YELLOW}[STALE]${NC} ${f}: ${ds} — $(echo "$line" | head -c 80)" >&2
+                        issues=$((issues + 1))
+                        if $fix; then
+                            sed -i '' "s/\[${ds}\]/[${ds}] [STALE?]/" "$f"
+                        fi
+                    fi
+                fi
+            done < "$f"
+
+            # Oversized topic check (200 line limit)
+            local lc
+            lc=$(wc -l < "$f" | tr -d ' ')
+            if [ "$lc" -gt 200 ]; then
+                echo -e "  ${YELLOW}[OVERSIZED]${NC} ${f}: ${lc} lines (limit: 200)" >&2
+                issues=$((issues + 1))
+            fi
+        done
+    fi
+
+    # 2. Index.md vs topics/ directory mismatch
+    if [ -f "wiki/Index.md" ] && [ -d "wiki/topics" ]; then
+        # Files referenced in Index but missing on disk
+        grep -o "topics/[^)]*\.md" wiki/Index.md 2>/dev/null | sort -u | while read -r ref; do
+            if [ ! -f "wiki/${ref}" ]; then
+                echo -e "  ${RED}[MISSING]${NC} Index.md → ${ref} (file not found)" >&2
+                issues=$((issues + 1))
+            fi
+        done
+
+        # Files on disk but not in Index
+        for f in wiki/topics/*.md; do
+            [ ! -f "$f" ] && continue
+            local fn
+            fn=$(basename "$f")
+            if ! grep -q "$fn" wiki/Index.md 2>/dev/null; then
+                echo -e "  ${YELLOW}[UNINDEXED]${NC} ${f} (not in Index.md)" >&2
+                issues=$((issues + 1))
+            fi
+        done
+    fi
+
+    # 3. RULES.md duplicate rules
+    if [ -f "RULES.md" ]; then
+        local dupes
+        dupes=$(grep "^- \[" RULES.md 2>/dev/null | sed 's/^- \[[0-9-]*\] //' | sort | uniq -d || true)
+        if [ -n "$dupes" ]; then
+            echo -e "  ${YELLOW}[DUPLICATE]${NC} RULES.md has duplicate rules:" >&2
+            echo "$dupes" | while read -r d; do echo "    - $d" >&2; done
+            issues=$((issues + 1))
+        fi
+    fi
+
+    echo "" >&2
+    if [ "$issues" -eq 0 ]; then
+        log_ok "Wiki lint: no issues found"
+    else
+        log_warn "Wiki lint: ${issues} issue(s) found"
+        if ! $fix; then
+            echo "  Run 'aib wiki lint --fix' to auto-fix staleness markers." >&2
+        fi
+    fi
+}
+
+# ============================================================
 # aib council [flags] "topic" — Wrapper around council.sh
 # ============================================================
 cmd_council() {
@@ -958,12 +1112,32 @@ sync_new_files() {
     local ws_name
     ws_name=$(basename "$target")
 
-    # Collect scaffold files from manifest
+    # Collect scaffold and system files from manifest
     while IFS=: read -r file strategy; do
         [[ "$file" =~ ^#.*$ || -z "$file" ]] && continue
-        [ "$strategy" != "scaffold" ] && continue
 
         local dest="$target/$file"
+
+        # system strategy: always overwrite from template (system-owned docs)
+        if [ "$strategy" = "system" ]; then
+            if $dry_run; then
+                if [ -f "$dest" ]; then
+                    log_info "[dry-run] Would update: $file (system template)"
+                else
+                    log_info "[dry-run] Would create: $file (system template)"
+                fi
+            else
+                mkdir -p "$(dirname "$dest")"
+                sed "s|{{WORKSPACE_NAME}}|${ws_name}|g; s|{{AIB_VERSION}}|${AIB_VERSION}|g" \
+                    "$TEMPLATE_DIR/$file" > "$dest"
+                log_ok "Synced: $file (system)"
+            fi
+            continue
+        fi
+
+        # scaffold strategy: create if missing
+        [ "$strategy" != "scaffold" ] && continue
+
         if [ ! -f "$dest" ]; then
             if $dry_run; then
                 log_info "[dry-run] Would create: $file (from template)"
@@ -1215,6 +1389,13 @@ case "${1:-}" in
     sync)    shift; cmd_sync "$@" ;;
     council) shift; cmd_council "$@" ;;
     barracks) shift; cmd_barracks "$@" ;;
+    wiki)
+        shift
+        case "${1:-}" in
+            lint) shift; cmd_wiki_lint "$@" ;;
+            *)    log_err "Usage: aib wiki <lint> [--fix]"; exit 1 ;;
+        esac
+        ;;
     version) echo "aib v${AIB_VERSION}" ;;
     -h|--help|help|"")
         echo "aib — AI Barracks CLI v${AIB_VERSION}"
@@ -1227,6 +1408,7 @@ case "${1:-}" in
         echo "  hook continue <session_id>     Continue another CLI's session"
         echo "  barracks [list|remove|route|refresh]   Manage registered barracks"
         echo "  status                         Show active sessions and wiki"
+        echo "  wiki lint [--fix]              Check wiki health and freshness"
         echo "  sync [--dry-run] [path]        Sync templates + protocol to barrack"
         echo "  council [-r N] [-m MODE] \"topic\"  Run multi-LLM debate council"
         echo "  version                        Show version"
