@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.9.1] - 2026-04-16
+
+### Fixed
+- `register_barrack()`: jq 실패 시 barracks.json이 빈 파일로 덮어써지는 버그 수정 — tmp 파일에 쓰고 JSON 검증 후 atomic mv
+- `unregister_barrack()`: 동일한 안전장치 적용
+
 ## [0.9.0] - 2026-04-14
 
 ### Motivation

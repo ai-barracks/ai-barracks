@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-AIB_VERSION="0.9.0"
+AIB_VERSION="0.9.1"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 
@@ -88,10 +88,17 @@ register_barrack() {
 
     # Remove existing entry for this path, then add new
     local tmp="${AIB_REGISTRY}.tmp"
+    local tmp2="${AIB_REGISTRY}.tmp2"
     jq --arg p "$path" '[.[] | select(.path != $p)]' "$AIB_REGISTRY" > "$tmp" 2>/dev/null || echo '[]' > "$tmp"
     jq --arg p "$path" --arg n "$name" --arg d "$description" --arg e "$expertise" --arg t "$topics" \
         '. + [{"path": $p, "name": $n, "description": $d, "expertise": $e, "topics": $t}]' \
-        "$tmp" > "$AIB_REGISTRY"
+        "$tmp" > "$tmp2" 2>/dev/null
+    if jq empty "$tmp2" 2>/dev/null; then
+        mv "$tmp2" "$AIB_REGISTRY"
+    else
+        log_err "Failed to update barracks.json — original preserved"
+        rm -f "$tmp2"
+    fi
     rm -f "$tmp"
     log_ok "Barrack registered in ~/.aib/barracks.json"
 }
@@ -101,7 +108,13 @@ unregister_barrack() {
     ensure_registry
     local tmp="${AIB_REGISTRY}.tmp"
     jq --arg p "$path" '[.[] | select(.path != $p)]' "$AIB_REGISTRY" > "$tmp" 2>/dev/null || true
-    mv "$tmp" "$AIB_REGISTRY"
+    if jq empty "$tmp" 2>/dev/null; then
+        mv "$tmp" "$AIB_REGISTRY"
+    else
+        log_err "Failed to update barracks.json — original preserved"
+        rm -f "$tmp"
+        return 1
+    fi
     log_ok "Barrack unregistered: $path"
 }
 
