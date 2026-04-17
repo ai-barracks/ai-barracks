@@ -1,8 +1,39 @@
 # AI Barracks (AIB)
 
-Cross-client LLM session sharing and persistent memory system.
+Git-native AI agent workspace — 하네스 엔지니어링, LLM-Wiki, GitAgent를 배럭 단위로 패키징.
 
-Any LLM (Claude, Gemini, Codex) across any interface shares sessions and knowledge through simple markdown files. A git repo initialized with `aib init` becomes a **barrack** — a base from which AI agents are deployed on missions.
+## 왜 만들었나
+
+AI 코딩 에이전트를 실무에서 쓰다 보면 세션이 끝날 때마다 맥락이 사라집니다.
+어제 알려준 규칙을 오늘 또 설명하고, 아키텍처 결정의 이유를 매번 반복합니다.
+
+한편, AI 에이전트를 잘 다루기 위한 좋은 아이디어들이 나오고 있습니다:
+
+- **하네스 엔지니어링** (Anthropic, OpenAI) — 에이전트에게 규칙을 말하지 말고, Hook과 불변식으로 기계적으로 강제하라
+- **LLM-Wiki** (Karpathy) — 세션에서 발견한 지식을 토픽별로 추출하여 장기 기억으로 축적
+- **GitAgent** — 에이전트의 정체성(SOUL.md)과 행동 규칙(RULES.md)을 표준화된 파일로 관리
+
+이 컨셉들은 강력하지만, 각각 직접 구현하고 조합해야 합니다.
+
+**AI Barracks는 이 컨셉들을 하나의 "배럭"으로 패키징합니다.**
+`aib init` 한 번이면 프로젝트 디렉토리가 AI 에이전트 워크스페이스로 변환되고,
+세션 관리, 지식 축적, 규칙 학습, 불변식 강제가 자동으로 동작합니다.
+
+- DB도, 서버도, SaaS도 없이 — Git repo 하나가 에이전트의 장기 기억
+- Claude Code, Gemini CLI, Codex CLI가 같은 배럭을 공유하고 세션을 이어받을 수 있음
+- 프로젝트별로 배럭을 만들어 각각의 에이전트를 독립적으로 관리
+
+## 핵심 컨셉
+
+| 컨셉 | 출처 | AI Barracks 구현 |
+|------|------|-----------------|
+| Hook 기반 자동화 | Harness Engineering | SessionStart/End Hook이 세션 등록, 정리, 요약을 자동 처리. LLM이 프로토콜을 잊어도 동작 |
+| 불변식 강제 | OpenAI Harness Engineering | 세션 종료 시 위반 자동 감지 → 다음 세션에 remediation 주입 |
+| LLM-Wiki | Karpathy | `wiki/Index.md`(~750토큰)만 로딩, 필요한 토픽만 선택적 로드. 세션마다 자동 추출 |
+| 에이전트 정체성 | GitAgent | `SOUL.md`(정체성) + `RULES.md`(규칙) + `agent.yaml`(메타데이터) 표준 파일 |
+| 자동 규칙 축적 | Growth Protocol | Decision Table로 "뭘 언제 어디에 기록할지" 명확화. 발견 즉시 기록 |
+| 영구 기록 | Veritable Records | 세션 기록은 삭제하지 않는 실록(Silok) — 프로젝트 의사결정 이력의 영구 보존 |
+| Cross-CLI | — | Claude/Gemini/Codex가 같은 배럭 공유. Rate limit 시 CLI 전환 + 세션 이어받기 |
 
 ## Quick Start
 
@@ -380,16 +411,6 @@ CLI 외에 데스크톱 앱으로도 배럭을 관제할 수 있다.
     │ Terminal   │            │ Desktop App │
     └────────────┘            └─────────────┘
 ```
-
-## Design Principles
-
-- **File-based**: No database, no server, no infrastructure
-- **Hook-enforced**: LLM이 프로토콜을 무시해도 hook이 강제 관리
-- **Invariant enforcement**: 불변식 위반을 기계적으로 감지하고 다음 세션에 remediation 주입
-- **Permanent history**: sessions/는 삭제하지 않는 Veritable Records aka 'Silok'
-- **Knowledge extraction**: 세션 → wiki 추출로 지식이 누적
-- **Cross-CLI**: 어떤 CLI에서든 이전 에이전트 세션을 이어받을 수 있음
-- **Token-efficient**: Index.md (~750 tokens)만 필수, 나머지 선택 로딩
 
 ## License
 

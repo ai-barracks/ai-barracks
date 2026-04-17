@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# aib — AI Barracks CLI v0.9.0
+# aib — AI Barracks CLI v1.0.0
 # Usage: aib <command> [args]
 #
 # Commands:
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-AIB_VERSION="0.9.1"
+AIB_VERSION="1.0.0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 

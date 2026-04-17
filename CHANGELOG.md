@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0] - 2026-04-17
+
+AI Barracks v1.0.0 공식 릴리즈.
+
+v0.9.0~v0.9.1의 변경사항을 포함하며, 프로덕션 안정 버전으로 선언.
+
+### Highlights (since v0.8.2)
+- **Invariant Violation System**: Hook 기반 불변식 강제 (TASK_PENDING, GROWTH_MISSING, UNRESOLVED_BLOCKERS)
+- **Wiki Lint**: `aib wiki lint [--fix]` — STALE, OVERSIZED, MISSING, UNINDEXED, DUPLICATE 감지
+- **Progressive Disclosure**: AGENTS.md 목차화 + docs/ 분리 (session/growth/wiki protocol)
+- **Self-Correction Protocol**: `## Retries` 섹션 + 동일 오류 2회 반복 시 RULES.md 패턴화
+- **Atomic barracks.json write**: jq 실패 시 데이터 손실 방지
+
+---
+
 ## [0.9.1] - 2026-04-16
 
 ### Fixed
