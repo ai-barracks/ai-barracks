@@ -17,7 +17,9 @@ hooks:
   session_end: "aib hook end {client}"
 
 skills:
-  - council
+  discovery: auto       # auto: skills/ 자동 스캔 | explicit: enabled 리스트만
+  enabled:              # discovery=explicit일 때 활성 슬러그. auto일 땐 무시
+    - council
 
 compliance:
   session_retention: permanent

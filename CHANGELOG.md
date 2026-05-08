@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.1.0] - unreleased
+
+### Added — Skills as First-Class Capability
+- **`templates/skills/council/SKILL.md`**: 첫 reference 스킬 시드. 새 배럭 init 또는 `aib sync` 시 자동 배포. Anthropic Agent Skills 표준 frontmatter(`name`/`description`) + Claude Code 호환(`argument-hint`/`allowed-tools`) + ai-barracks 확장(`aib_version`/`upstream`/`growth_origin`).
+- **`templates/agent.yaml` skills 스키마 확장**: 기존 `skills: [council]` 리스트 → 객체 `skills: {discovery: auto|explicit, enabled: [...]}`. 1.0.x 리스트 형식은 backward compat 유지 (`discovery: explicit`로 해석).
+- **`aib skills list [path]`**: 배럭의 `skills/` 스캔 후 슬러그 + description 표 출력.
+- **`aib skills doctor [path]`**: SKILL.md frontmatter 유효성 검사 — name=슬러그 일치, description 존재, orphan 디렉터리 감지.
+- **`templates/docs/skills-protocol.md`**: Skills 사용/생성 프로토콜 가이드. session/wiki/growth 프로토콜과 동일 위계.
+- **`docs/rfcs/v1.1-skills.md`**: v1.1 도입 RFC (Anthropic Skills + GitAgent GAP 0.1.0 호환 근거, Open Questions Q1~Q8, aib-cc 영향 분석).
+
+### Changed
+- `AIB_VERSION` 1.0.1 → 1.1.0. `aib sync`의 `sync_version_stamp`가 모든 배럭의 agent.yaml을 자동 갱신.
+
+### Compatibility
+- 1.0.x 클라이언트는 새 `skills:` 객체 스키마 무시(YAML unknown key). 1.1 클라이언트는 리스트·객체 둘 다 파싱.
+- 기존 배럭은 `aib sync` 시 `templates/skills/` 신규 파일만 추가됨. 사용자가 작성한 SKILL.md는 절대 덮어쓰지 않음.
+
 ## [1.0.1] - 2026-05-04
 
 ### Fixed
