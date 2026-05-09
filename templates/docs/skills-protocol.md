@@ -74,11 +74,24 @@ backward compat: `skills: [council]` 리스트 형식도 그대로 유효(`disco
 
 세션 종료 audit 시 누적된 후보를 사용자가 검토 후 `skills/<slug>/SKILL.md`로 승격. **에이전트가 skills/를 직접 자동 생성하지 않는다** — SOUL.md 자기수정 금지 원칙과 동일 보호.
 
-## 호출 규약
+## 호출 규약 (v1.2.0+)
 
-- Claude Code: 네이티브 `Skill` 도구 (Anthropic 표준)
-- 슬랙/외부 클라이언트: `/skill:<name> [args]` 슬래시 명령(클라이언트별 어댑터 책임)
-- Gemini/Codex CLI: 네이티브 invoke 미지원 — SKILL.md를 *문서로* 참조, 본문 명시 명령을 직접 실행
+`aib sync`가 두 가지 wiring을 materialize합니다:
+
+- **W1 (Claude Code, native)**: `skills/<n>/` → `.claude/skills/<n>/` 상대 symlink 자동 생성. Claude Code의 project-local skill discovery가 이를 인식해 native `Skill` 도구로 호출 가능. 런타임 산물이므로 `.gitignore`에 포함.
+- **W2 (Gemini/Codex, 텍스트 카탈로그)**: `CLAUDE.md` = `GEMINI.md` = `AGENTS.md`의 `<!-- AIB:SKILLS:START -->` 블록에 카탈로그 자동 주입. agent가 SKILL.md를 *문서로* 읽고 본문 명시 명령을 직접 실행.
+
+### Drift 보호
+
+- `aib start <client>` 진입 시 `check_skills_drift` 실행 — 카탈로그와 W1/W2가 어긋나면 한 줄 경고. 차단하지 않음.
+- `aib skills check [path]` — 진단 전용.
+- `aib skills doctor` — frontmatter 유효성 + drift 통합 검사.
+
+### 사용자 워크플로
+
+1. `skills/<slug>/SKILL.md` 추가/수정
+2. `aib sync` (W1 + W2 갱신)
+3. 새 세션 시작 — Claude Code는 native, Gemini/Codex는 .md 카탈로그로 인식
 
 ## 관리 명령
 
