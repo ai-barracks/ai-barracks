@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.2.0] - unreleased
+
+### Added
+- **Skills loading (S4)**: `aib sync` now materializes `.claude/skills/<n>` relative symlinks (W1 — Claude Code native discovery) and an auto-managed `Available Skills` block in CLAUDE.md/GEMINI.md/AGENTS.md (W2 — Gemini/Codex text catalog). Closes the catalog-vs-loading gap that shipped in v1.1.0.
+- `aib skills check [path]` — read-only drift diagnostic.
+- `aib skills doctor` extended to validate W1+W2 consistency.
+- `aib start <client>` surfaces a non-blocking drift warning before launch.
+- `templates/.gitignore` shipped; existing barracks have `.claude/skills/` appended on next sync.
+
+### Changed
+- `inject_protocol` companion: `inject_skills_section` now runs as Step 1.5 of `aib sync`, before `sync_new_files`.
+
+### Compatibility
+- v1.1 catalog SKILL.md files are loaded as-is. No migration command needed; first `aib sync` after upgrade materializes the new wirings.
+- W2 marker block is harmless markdown to v1.1.x readers.
+
+### Docs
+- `docs/rfcs/v1.1-skills.md` — added Loading (S4 → renumbered S6) section.
+- `templates/docs/skills-protocol.md` — rewrote 호출 규약 section.
+
 ## [1.1.0] - unreleased
 
 ### Added — Skills as First-Class Capability
