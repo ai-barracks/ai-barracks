@@ -94,4 +94,25 @@ target=$(readlink "$B4/.claude/skills/council")
 [ -f "$B4/.claude/skills/council/SKILL.md" ] || fail "council symlink does not resolve to SKILL.md"
 pass "Test 4: relative symlinks created and resolve"
 
+# --- Test 5: deleting a skill removes the corresponding symlink ---
+B5=$(make_fixture_barrack)
+"$AIB_BIN" sync "$B5" >/dev/null 2>&1
+[ -L "$B5/.claude/skills/kanban" ] || fail "precondition: kanban symlink not present"
+rm -rf "$B5/skills/kanban"
+"$AIB_BIN" sync "$B5" >/dev/null 2>&1
+[ ! -e "$B5/.claude/skills/kanban" ] || fail "orphan kanban symlink not removed"
+[ -L "$B5/.claude/skills/council" ] || fail "council symlink should remain"
+pass "Test 5: orphan symlink removed when skill deleted"
+
+# --- Test 6: renaming a skill slug yields a new symlink (and old one cleaned) ---
+B6=$(make_fixture_barrack)
+"$AIB_BIN" sync "$B6" >/dev/null 2>&1
+mv "$B6/skills/kanban" "$B6/skills/sprint"
+# Update SKILL.md frontmatter to match new slug
+sed -i '' 's/name: kanban/name: sprint/' "$B6/skills/sprint/SKILL.md"
+"$AIB_BIN" sync "$B6" >/dev/null 2>&1
+[ -L "$B6/.claude/skills/sprint" ] || fail "sprint symlink not created after rename"
+[ ! -e "$B6/.claude/skills/kanban" ] || fail "old kanban symlink not cleaned after rename"
+pass "Test 6: slug rename refreshes symlinks"
+
 echo "All skills wiring tests passed."
