@@ -54,4 +54,33 @@ for cfg in CLAUDE.md GEMINI.md AGENTS.md; do
 done
 pass "Test 1: inject_skills_section populates all three .md files"
 
+# --- Test 2: sync is idempotent for skills section ---
+B2=$(make_fixture_barrack)
+"$AIB_BIN" sync "$B2" >/dev/null 2>&1
+HASH1=$(cat "$B2/CLAUDE.md" | md5)
+"$AIB_BIN" sync "$B2" >/dev/null 2>&1
+HASH2=$(cat "$B2/CLAUDE.md" | md5)
+[ "$HASH1" = "$HASH2" ] || fail "CLAUDE.md not idempotent under double sync ($HASH1 vs $HASH2)"
+pass "Test 2: sync is idempotent"
+
+# --- Test 3: user content above and below SKILLS markers is preserved ---
+B3=$(make_fixture_barrack)
+"$AIB_BIN" sync "$B3" >/dev/null 2>&1
+# Insert user content above and below the SKILLS block
+python3 - "$B3/CLAUDE.md" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+text = p.read_text()
+sm = "<!-- AIB:SKILLS:START -->"
+em = "<!-- AIB:SKILLS:END -->"
+i = text.index(sm)
+j = text.index(em) + len(em)
+new = text[:i] + "\n## My Custom Section Above\nHello above.\n\n" + text[i:j] + "\n\n## My Custom Section Below\nHello below.\n" + text[j:]
+p.write_text(new)
+PY
+"$AIB_BIN" sync "$B3" >/dev/null 2>&1
+grep -q "My Custom Section Above" "$B3/CLAUDE.md" || fail "user content above SKILLS markers was lost"
+grep -q "My Custom Section Below" "$B3/CLAUDE.md" || fail "user content below SKILLS markers was lost"
+pass "Test 3: user content outside markers preserved"
+
 echo "All skills wiring tests passed."
