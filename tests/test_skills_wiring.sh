@@ -133,4 +133,21 @@ out="$("$AIB_BIN" skills doctor "$B7" 2>&1 || true)"
 echo "$out" | grep -qi "drift\|out of sync\|sync needed" || fail "doctor did not detect new skill as drift: $out"
 pass "Test 7: drift detected after adding skill without sync"
 
+# --- Test 8: 'aib skills check' (read-only diagnostic exposed for cmd_start) ---
+B8=$(make_fixture_barrack)
+"$AIB_BIN" sync "$B8" >/dev/null 2>&1
+out="$(cd "$B8" && "$AIB_BIN" skills check 2>&1)"
+echo "$out" | grep -qi "drift" && fail "fresh barrack should not warn drift: $out"
+# Add skill without sync
+mkdir -p "$B8/skills/standup"
+cat > "$B8/skills/standup/SKILL.md" <<'EOF'
+---
+name: standup
+description: "Daily standup helper."
+---
+EOF
+out2="$(cd "$B8" && "$AIB_BIN" skills check 2>&1 || true)"
+echo "$out2" | grep -qi "drift" || fail "drift not surfaced after new skill: $out2"
+pass "Test 8: 'aib skills check' surfaces drift"
+
 echo "All skills wiring tests passed."
