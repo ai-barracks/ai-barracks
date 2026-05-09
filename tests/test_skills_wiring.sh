@@ -115,4 +115,22 @@ sed -i '' 's/name: kanban/name: sprint/' "$B6/skills/sprint/SKILL.md"
 [ ! -e "$B6/.claude/skills/kanban" ] || fail "old kanban symlink not cleaned after rename"
 pass "Test 6: slug rename refreshes symlinks"
 
+# --- Test 7: check_skills_drift detects post-sync edits ---
+B7=$(make_fixture_barrack)
+"$AIB_BIN" sync "$B7" >/dev/null 2>&1
+# In-sync: command should succeed silently
+"$AIB_BIN" skills doctor "$B7" >/dev/null 2>&1 || fail "doctor failed on freshly-synced barrack"
+# Now add a new skill WITHOUT running sync — drift!
+mkdir -p "$B7/skills/retrospective"
+cat > "$B7/skills/retrospective/SKILL.md" <<'EOF'
+---
+name: retrospective
+description: "End-of-sprint retrospective facilitation."
+---
+EOF
+# Doctor should now warn about drift
+out="$("$AIB_BIN" skills doctor "$B7" 2>&1 || true)"
+echo "$out" | grep -qi "drift\|out of sync\|sync needed" || fail "doctor did not detect new skill as drift: $out"
+pass "Test 7: drift detected after adding skill without sync"
+
 echo "All skills wiring tests passed."

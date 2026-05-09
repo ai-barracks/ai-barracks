@@ -616,6 +616,60 @@ sync_claude_skills_symlinks() {
     return 0
 }
 
+# Read-only check: are the materialized W1/W2 wirings in sync with skills/?
+# Echoes a single warning line per drift kind. Returns 0 (clean) or 1 (drifted).
+check_skills_drift() {
+    local target="$1"
+    local skills_dir="$target/skills"
+    local claude_skills_dir="$target/.claude/skills"
+    local drifted=0
+
+    if [ ! -d "$skills_dir" ]; then
+        return 0
+    fi
+
+    # 1. W1 drift: every skill should have a symlink, every symlink a skill
+    for skill_md in "$skills_dir"/*/SKILL.md; do
+        [ -f "$skill_md" ] || continue
+        local slug
+        slug="$(basename "$(dirname "$skill_md")")"
+        if [ ! -L "$claude_skills_dir/$slug" ]; then
+            log_warn "Skills drift (W1): missing .claude/skills/$slug — run 'aib sync'"
+            drifted=1
+        fi
+    done
+    if [ -d "$claude_skills_dir" ]; then
+        for entry in "$claude_skills_dir"/*; do
+            [ -L "$entry" ] || continue
+            local slug
+            slug="$(basename "$entry")"
+            if [ ! -f "$skills_dir/$slug/SKILL.md" ]; then
+                log_warn "Skills drift (W1): orphan .claude/skills/$slug — run 'aib sync'"
+                drifted=1
+            fi
+        done
+    fi
+
+    # 2. W2 drift: re-render the block and diff against what's in CLAUDE.md
+    # (We pick CLAUDE.md as the witness — all three are kept identical.)
+    local witness="$target/CLAUDE.md"
+    if [ -f "$witness" ]; then
+        local expected actual
+        expected="$(render_skills_block "$target")"
+        actual=$(awk -v sm="$SKILLS_MARKER" -v em="$SKILLS_MARKER_END" '
+            $0 == sm { capture=1 }
+            capture { print }
+            $0 == em { capture=0 }
+        ' "$witness")
+        if [ -z "$actual" ] || [ "$expected" != "$actual" ]; then
+            log_warn "Skills drift (W2): CLAUDE.md SKILLS section is stale — run 'aib sync'"
+            drifted=1
+        fi
+    fi
+
+    return $drifted
+}
+
 # ============================================================
 # aib hook start <client> — Called by CLI SessionStart hooks
 # ============================================================
@@ -1701,6 +1755,10 @@ cmd_skills_doctor() {
         fi
     done
     if [ "$issues" -eq 0 ]; then
+        # v1.2.0: also verify W1+W2 are in sync with the catalog
+        if ! check_skills_drift "$target"; then
+            return 1
+        fi
         log_ok "All skills look healthy"
     else
         log_err "Found $issues issue(s) — fix above"
