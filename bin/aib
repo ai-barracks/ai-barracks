@@ -555,7 +555,7 @@ inject_skills_section() {
             $0 == sm { skip=1; next }
             $0 == em { skip=0; next }
             !skip { print }
-        ' "$fpath")
+        ' "$fpath" | sed '/./,$!d')
 
         local tmp="${fpath}.tmp"
         if [ -n "$user_content" ]; then
