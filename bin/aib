@@ -305,6 +305,11 @@ cmd_init() {
 
     # 4. .gitignore
     local gitignore="$target/.gitignore"
+    # 4a. v1.2.0: scaffold .gitignore from template if absent
+    if [ ! -f "$gitignore" ] && [ -f "$TEMPLATE_DIR/.gitignore" ]; then
+        cp "$TEMPLATE_DIR/.gitignore" "$gitignore"
+        log_ok "Scaffolded .gitignore"
+    fi
     local needs_update=false
     if [ -f "$gitignore" ]; then
         grep -q "^SESSIONS.md$" "$gitignore" || needs_update=true
@@ -614,6 +619,19 @@ sync_claude_skills_symlinks() {
 
     [ "$linked" -gt 0 ] && log_ok "Synced $linked Claude skill symlink(s) under .claude/skills/"
     return 0
+}
+
+# Ensure .claude/skills/ is gitignored. Append if .gitignore exists and entry missing.
+# Does NOT create .gitignore if absent (cmd_init's responsibility).
+ensure_gitignore_skills_entry() {
+    local target="$1"
+    local gi="$target/.gitignore"
+    [ -f "$gi" ] || return 0
+    if ! grep -qx ".claude/skills/" "$gi"; then
+        # Append with a comment line on first amendment
+        printf '\n# aib v1.2.0: runtime symlinks materialized by `aib sync`\n.claude/skills/\n' >> "$gi"
+        log_ok "Added .claude/skills/ to .gitignore"
+    fi
 }
 
 # Read-only check: are the materialized W1/W2 wirings in sync with skills/?
@@ -1599,6 +1617,7 @@ cmd_sync() {
         inject_protocol "$target"
         inject_skills_section "$target"
         sync_claude_skills_symlinks "$target"
+        ensure_gitignore_skills_entry "$target"
     fi
 
     # 2. Scaffold missing files

@@ -1,0 +1,4 @@
+.DS_Store
+
+# aib v1.2.0: runtime symlinks materialized by `aib sync`
+.claude/skills/

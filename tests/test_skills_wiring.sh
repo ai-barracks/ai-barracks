@@ -150,4 +150,21 @@ out2="$(cd "$B8" && "$AIB_BIN" skills check 2>&1 || true)"
 echo "$out2" | grep -qi "drift" || fail "drift not surfaced after new skill: $out2"
 pass "Test 8: 'aib skills check' surfaces drift"
 
+# --- Test 9: aib sync ensures .claude/skills/ is gitignored ---
+B9=$(make_fixture_barrack)
+# No .gitignore yet — sync should create or skip per init policy.
+# We accept either: created with the entry, OR not created at all.
+"$AIB_BIN" sync "$B9" >/dev/null 2>&1
+if [ -f "$B9/.gitignore" ]; then
+    grep -q "^\.claude/skills/$" "$B9/.gitignore" || fail ".gitignore exists but missing .claude/skills/ entry"
+fi
+
+# Now create a .gitignore with unrelated content; sync should append
+B9b=$(make_fixture_barrack)
+echo "node_modules/" > "$B9b/.gitignore"
+"$AIB_BIN" sync "$B9b" >/dev/null 2>&1
+grep -q "^\.claude/skills/$" "$B9b/.gitignore" || fail "sync did not append .claude/skills/ to existing .gitignore"
+grep -q "^node_modules/$" "$B9b/.gitignore" || fail "sync clobbered existing .gitignore content"
+pass "Test 9: .claude/skills/ is gitignored after sync"
+
 echo "All skills wiring tests passed."
