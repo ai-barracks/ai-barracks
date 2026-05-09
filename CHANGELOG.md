@@ -1,16 +1,16 @@
 # Changelog
 
-## [1.2.0] - unreleased
+## [1.2.0] - 2026-05-09
 
 ### Added
-- **Skills loading (S4)**: `aib sync` now materializes `.claude/skills/<n>` relative symlinks (W1 — Claude Code native discovery) and an auto-managed `Available Skills` block in CLAUDE.md/GEMINI.md/AGENTS.md (W2 — Gemini/Codex text catalog). Closes the catalog-vs-loading gap that shipped in v1.1.0.
+- **Skills loading (S6 — was drafted as S4)**: `aib sync` now materializes `.claude/skills/<n>` relative symlinks (W1 — Claude Code native discovery) and an auto-managed `Available Skills` block in CLAUDE.md/GEMINI.md/AGENTS.md (W2 — Gemini/Codex text catalog). Closes the catalog-vs-loading gap that shipped in v1.1.0.
 - `aib skills check [path]` — read-only drift diagnostic.
 - `aib skills doctor` extended to validate W1+W2 consistency.
 - `aib start <client>` surfaces a non-blocking drift warning before launch.
 - `templates/.gitignore` shipped; existing barracks have `.claude/skills/` appended on next sync.
 
 ### Changed
-- `inject_protocol` companion: `inject_skills_section` now runs as Step 1.5 of `aib sync`, before `sync_new_files`.
+- `cmd_sync` step ordering: `inject_protocol` runs first (creates CLAUDE.md/GEMINI.md/AGENTS.md), then `sync_new_files` (auto-seeds `templates/skills/council/`), then the skills-derived wirings (`inject_skills_section` → `sync_claude_skills_symlinks` → `ensure_gitignore_skills_entry`) so they observe the post-seed state. Earlier ordering caused fresh `aib init` + `aib sync` to end in a drifted state.
 
 ### Compatibility
 - v1.1 catalog SKILL.md files are loaded as-is. No migration command needed; first `aib sync` after upgrade materializes the new wirings.
@@ -20,7 +20,7 @@
 - `docs/rfcs/v1.1-skills.md` — added Loading (S4 → renumbered S6) section.
 - `templates/docs/skills-protocol.md` — rewrote 호출 규약 section.
 
-## [1.1.0] - unreleased
+## [1.1.0] - 2026-05-08
 
 ### Added — Skills as First-Class Capability
 - **`templates/skills/council/SKILL.md`**: 첫 reference 스킬 시드. 새 배럭 init 또는 `aib sync` 시 자동 배포. Anthropic Agent Skills 표준 frontmatter(`name`/`description`) + Claude Code 호환(`argument-hint`/`allowed-tools`) + ai-barracks 확장(`aib_version`/`upstream`/`growth_origin`).
