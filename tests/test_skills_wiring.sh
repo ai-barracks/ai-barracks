@@ -167,4 +167,17 @@ grep -q "^\.claude/skills/$" "$B9b/.gitignore" || fail "sync did not append .cla
 grep -q "^node_modules/$" "$B9b/.gitignore" || fail "sync clobbered existing .gitignore content"
 pass "Test 9: .claude/skills/ is gitignored after sync"
 
+# --- Test 10: aib init + aib sync converges in a single pass ---
+# Regression test for cmd_sync ordering bug — sync must materialize wirings
+# for skills auto-seeded by sync_new_files (e.g., templates/skills/council).
+B10=$(mktemp -d)
+FIXTURES+=("$B10")
+"$AIB_BIN" init "$B10/fresh" >/dev/null 2>&1 || fail "aib init failed"
+"$AIB_BIN" sync "$B10/fresh" >/dev/null 2>&1 || fail "aib sync failed"
+"$AIB_BIN" skills check "$B10/fresh" >/dev/null 2>&1 || {
+    out=$("$AIB_BIN" skills check "$B10/fresh" 2>&1 || true)
+    fail "fresh init+sync produces drift: $out"
+}
+pass "Test 10: init + sync converges in one pass"
+
 echo "All skills wiring tests passed."

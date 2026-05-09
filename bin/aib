@@ -1612,16 +1612,22 @@ cmd_sync() {
 
     # 1. Protocol injection (existing)
     if $dry_run; then
-        log_info "[dry-run] Would update protocol/skills section + .claude/skills/ symlinks"
+        log_info "[dry-run] Would update protocol in CLAUDE.md, GEMINI.md, AGENTS.md"
     else
         inject_protocol "$target"
+    fi
+
+    # 2. Scaffold missing files (may auto-seed templates/skills/, etc.)
+    sync_new_files "$target" "$dry_run"
+
+    # 2b. v1.2.0: skills wirings — must run AFTER sync_new_files so auto-seeded skills are visible
+    if $dry_run; then
+        log_info "[dry-run] Would update skills section + .claude/skills/ symlinks + .gitignore entry"
+    else
         inject_skills_section "$target"
         sync_claude_skills_symlinks "$target"
         ensure_gitignore_skills_entry "$target"
     fi
-
-    # 2. Scaffold missing files
-    sync_new_files "$target" "$dry_run"
 
     # 3. Section guards (SOUL.md, RULES.md)
     sync_sections_md "$target" "$dry_run"
