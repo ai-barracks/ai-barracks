@@ -568,6 +568,54 @@ inject_skills_section() {
     done
 }
 
+# Maintain .claude/skills/<n> -> ../../skills/<n> relative symlinks so that
+# Claude Code's project-local skill discovery picks them up automatically.
+# Idempotent: replaces existing symlinks and removes orphans.
+sync_claude_skills_symlinks() {
+    local target="$1"
+    local skills_dir="$target/skills"
+    local claude_skills_dir="$target/.claude/skills"
+
+    if [ ! -d "$skills_dir" ]; then
+        # No skills — clear the .claude/skills/ directory entirely (orphan-only)
+        if [ -d "$claude_skills_dir" ]; then
+            find "$claude_skills_dir" -mindepth 1 -maxdepth 1 -type l -delete 2>/dev/null || true
+        fi
+        return 0
+    fi
+
+    mkdir -p "$claude_skills_dir"
+
+    # 1. Create/refresh symlinks for every skill that has SKILL.md
+    local linked=0
+    for skill_md in "$skills_dir"/*/SKILL.md; do
+        [ -f "$skill_md" ] || continue
+        local slug
+        slug="$(basename "$(dirname "$skill_md")")"
+        local link="$claude_skills_dir/$slug"
+        # Force-replace (handles slug rename, broken link, regular dir)
+        rm -rf "$link"
+        ln -s "../../skills/$slug" "$link"
+        linked=$((linked + 1))
+    done
+
+    # 2. Remove orphan symlinks whose source no longer exists
+    if [ -d "$claude_skills_dir" ]; then
+        for entry in "$claude_skills_dir"/*; do
+            [ -L "$entry" ] || continue
+            local slug
+            slug="$(basename "$entry")"
+            if [ ! -f "$skills_dir/$slug/SKILL.md" ]; then
+                rm -f "$entry"
+                log_info "Removed orphan symlink: .claude/skills/$slug"
+            fi
+        done
+    fi
+
+    [ "$linked" -gt 0 ] && log_ok "Synced $linked Claude skill symlink(s) under .claude/skills/"
+    return 0
+}
+
 # ============================================================
 # aib hook start <client> — Called by CLI SessionStart hooks
 # ============================================================
@@ -1489,10 +1537,11 @@ cmd_sync() {
 
     # 1. Protocol injection (existing)
     if $dry_run; then
-        log_info "[dry-run] Would update protocol + skills section in CLAUDE.md, GEMINI.md, AGENTS.md"
+        log_info "[dry-run] Would update protocol/skills section + .claude/skills/ symlinks"
     else
         inject_protocol "$target"
         inject_skills_section "$target"
+        sync_claude_skills_symlinks "$target"
     fi
 
     # 2. Scaffold missing files

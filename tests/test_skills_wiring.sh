@@ -83,4 +83,15 @@ grep -q "My Custom Section Above" "$B3/CLAUDE.md" || fail "user content above SK
 grep -q "My Custom Section Below" "$B3/CLAUDE.md" || fail "user content below SKILLS markers was lost"
 pass "Test 3: user content outside markers preserved"
 
+# --- Test 4: aib sync creates relative symlinks under .claude/skills/ ---
+B4=$(make_fixture_barrack)
+"$AIB_BIN" sync "$B4" >/dev/null 2>&1
+[ -L "$B4/.claude/skills/council" ] || fail ".claude/skills/council symlink not created"
+[ -L "$B4/.claude/skills/kanban" ] || fail ".claude/skills/kanban symlink not created"
+target=$(readlink "$B4/.claude/skills/council")
+[ "$target" = "../../skills/council" ] || fail "council symlink target wrong: '$target' (expected ../../skills/council)"
+# Resolve through the symlink to confirm it points to a real directory containing SKILL.md
+[ -f "$B4/.claude/skills/council/SKILL.md" ] || fail "council symlink does not resolve to SKILL.md"
+pass "Test 4: relative symlinks created and resolve"
+
 echo "All skills wiring tests passed."
