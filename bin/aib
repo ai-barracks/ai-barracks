@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-AIB_VERSION="1.2.0"
+AIB_VERSION="1.2.1"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 
@@ -793,7 +793,19 @@ cmd_hook_start() {
         local prev_base
         prev_base=$(basename "$prev_file" .md)
         [ -f "sessions/${prev_base}.violations" ] || [ -f "sessions/${prev_base}.violations.delivered" ] && continue
-        if grep -q "## Wiki Extractions" "$prev_file" && ! grep -A1 "## Wiki Extractions" "$prev_file" | grep -q "^- "; then
+        # Extract the entire Wiki Extractions section body (between its header and the next "## ")
+        # and strip HTML comments + blank lines. Any remaining content (a "- " bullet or a
+        # parenthetical "(없음 — ...)" reason line) means the author satisfied the protocol.
+        # Prior versions used `grep -A1` which only saw the first line after the header and
+        # produced false positives whenever the template's 4-line guidance comment block was
+        # present — see wiki: AIB-Hook-Stale-Cleanup-Bug 변종 F.
+        local wiki_body
+        wiki_body=$(awk '
+            /^## Wiki Extractions/ { capture=1; next }
+            capture && /^## / { capture=0 }
+            capture { print }
+        ' "$prev_file" | grep -v '^[[:space:]]*<!--' | grep -v '^[[:space:]]*$' || true)
+        if grep -q "## Wiki Extractions" "$prev_file" && [ -z "$wiki_body" ]; then
             local prev_status
             prev_status=$(grep "^\- \*\*Status\*\*:" "$prev_file" | sed 's/.*: //' || true)
             if [ "$prev_status" = "completed" ] || [ "$prev_status" = "interrupted" ]; then

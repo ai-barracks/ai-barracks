@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.1] - 2026-05-15
+
+### Fixed
+- **SessionStart hook — false-positive "no Wiki Extractions" alerts (variant F)**: `cmd_hook_start` used `grep -A1 "## Wiki Extractions"` to decide whether the previous session had recorded any extraction. That window only saw the single line right after the header, so the four-line guidance comment block emitted by the session template hid any real `- ` bullet placed below it, and the recommended `(없음 — wiki: … / RULES: … / SOUL: …)` parenthetical "no extractions, with reason" form was never accepted either. The detector now scans the full Wiki Extractions section (header through the next `## `), strips HTML comments and blank lines, and fires only when the section is genuinely empty. Sessions whose authors followed the protocol — whether with bullets or parenthetical reasons — no longer surface the same alert every time a new session starts. See `wiki/topics/AIB-Hook-Stale-Cleanup-Bug.md` variant F for the full diagnosis.
+
+### Tests
+- `tests/test_hook_wiki_extractions.sh` — pins the new detector against four fixture cases (real bullet under template comments, parenthetical reason line, comments-only, truly empty).
+
 ## [1.2.0] - 2026-05-09
 
 ### Added
