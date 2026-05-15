@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-AIB_VERSION="1.2.1"
+AIB_VERSION="1.2.2"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 
@@ -107,9 +107,31 @@ ensure_registry() {
     [ -f "$AIB_REGISTRY" ] || echo '[]' > "$AIB_REGISTRY"
 }
 
+_is_ephemeral_path() {
+    # True (return 0) for temp/scratch directories that should never be
+    # written into the global barrack registry. Test fixtures and ad-hoc
+    # `mktemp -d` workspaces created by ai-barracks's own integration tests
+    # used to leak entries here on every CI run because the trap that
+    # removed the directory never called `unregister_barrack`.
+    case "$1" in
+        /tmp/*|/var/folders/*|/private/tmp/*|/private/var/folders/*) return 0 ;;
+    esac
+    case "$(basename "$1")" in
+        tmp.*) return 0 ;;
+    esac
+    return 1
+}
+
 register_barrack() {
     local path="$1"
     ensure_registry
+
+    # Skip ephemeral / temp paths so test fixtures and scratch dirs don't
+    # leak into ~/.aib/barracks.json. Opt out with AIB_REGISTER_FORCE=1 if
+    # you really do want to track a barrack under /tmp.
+    if [ "${AIB_REGISTER_FORCE:-0}" != "1" ] && _is_ephemeral_path "$path"; then
+        return 0
+    fi
 
     # Extract metadata from barrack files
     local name
@@ -1329,8 +1351,51 @@ cmd_barracks() {
             done
             log_ok "All barracks refreshed"
             ;;
+        gc)
+            # Prune stale registry entries:
+            #   1) path no longer exists on disk
+            #   2) path is under a temp/scratch directory (test fixture leakage)
+            local dry_run=0
+            shift  # past "gc"
+            for arg in "$@"; do
+                case "$arg" in
+                    --dry-run|-n) dry_run=1 ;;
+                esac
+            done
+
+            local removed=0
+            local kept=0
+            local paths
+            paths=$(jq -r '.[].path' "$AIB_REGISTRY")
+            while IFS= read -r p; do
+                [ -z "$p" ] && continue
+                local reason=""
+                if _is_ephemeral_path "$p"; then
+                    reason="ephemeral path"
+                elif [ ! -d "$p" ]; then
+                    reason="missing on disk"
+                fi
+                if [ -n "$reason" ]; then
+                    if [ "$dry_run" = "1" ]; then
+                        echo "  would remove: $p  (${reason})" >&2
+                    else
+                        echo "  removing:     $p  (${reason})" >&2
+                        unregister_barrack "$p" >/dev/null 2>&1 || true
+                    fi
+                    removed=$((removed + 1))
+                else
+                    kept=$((kept + 1))
+                fi
+            done <<< "$paths"
+
+            if [ "$dry_run" = "1" ]; then
+                log_info "Dry run: would remove ${removed} entries, keep ${kept}"
+            else
+                log_ok "GC complete: removed ${removed} stale entries, kept ${kept}"
+            fi
+            ;;
         *)
-            log_err "Usage: aib barracks <list|remove|route|refresh>"
+            log_err "Usage: aib barracks <list|remove|route|refresh|gc [--dry-run]>"
             exit 1
             ;;
     esac

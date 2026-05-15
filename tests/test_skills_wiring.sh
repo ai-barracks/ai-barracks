@@ -9,7 +9,17 @@ fail() { echo "FAIL: $1"; exit 1; }
 pass() { echo "PASS: $1"; }
 
 FIXTURES=()
-trap 'for d in "${FIXTURES[@]:-}"; do rm -rf "$d"; done' EXIT
+# Clean up both the on-disk fixture directories AND any registry entries that
+# `aib sync` / `aib init` may have written into ~/.aib/barracks.json for them.
+# Prior to this trap, fixtures leaked into the global registry on every CI run.
+cleanup_fixtures() {
+    for d in "${FIXTURES[@]:-}"; do
+        [ -z "$d" ] && continue
+        "$AIB_BIN" barracks remove "$d" >/dev/null 2>&1 || true
+        rm -rf "$d"
+    done
+}
+trap cleanup_fixtures EXIT
 
 [ -x "$AIB_BIN" ] || fail "$AIB_BIN not executable"
 

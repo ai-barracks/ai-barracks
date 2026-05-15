@@ -22,7 +22,16 @@ fail() { echo "FAIL: $1"; exit 1; }
 pass() { echo "PASS: $1"; }
 
 FIXTURES=()
-trap 'for d in "${FIXTURES[@]:-}"; do rm -rf "$d"; done' EXIT
+# Clean up both the on-disk fixture directories AND any registry entries
+# (~/.aib/barracks.json) that `aib hook start` may have written for them.
+cleanup_fixtures() {
+    for d in "${FIXTURES[@]:-}"; do
+        [ -z "$d" ] && continue
+        "$AIB_BIN" barracks remove "$d" >/dev/null 2>&1 || true
+        rm -rf "$d"
+    done
+}
+trap cleanup_fixtures EXIT
 
 [ -x "$AIB_BIN" ] || fail "$AIB_BIN not executable"
 
