@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.2] - 2026-05-15
+
+### Fixed
+- **Test fixture leakage into `~/.aib/barracks.json`**: ai-barracks's own integration tests created barracks under `mktemp -d` and `aib init` / `aib sync` wrote those `/var/folders/.../tmp.XXX` paths into the global registry. The `trap rm -rf` at the end of each test removed the directory but never called `unregister_barrack`, so every CI run accumulated stale entries — observed at 13 leaked entries plus 224 orphaned on-disk fixture dirs in real-world use. `register_barrack` now skips paths under `/tmp`, `/var/folders`, `/private/tmp`, `/private/var/folders`, and any basename matching `tmp.*`. Set `AIB_REGISTER_FORCE=1` to opt back in for the rare case you actually want to track an ephemeral barrack.
+
+### Added
+- **`aib barracks gc [--dry-run]`** — prunes registry entries whose path is either ephemeral (matches the same patterns above) or no longer exists on disk. Use `--dry-run` to preview without mutating.
+
+### Tests
+- `tests/test_barracks_gc.sh` — pins both the ephemeral-path guard on `register_barrack` (including the `AIB_REGISTER_FORCE=1` opt-out) and the gc command (dry-run is read-only; real run removes ephemeral + missing-on-disk entries and preserves legitimate ones).
+- `tests/test_skills_wiring.sh` and `tests/test_hook_wiki_extractions.sh` traps now also call `aib barracks remove` on each fixture so they cannot leak even when the new guards are bypassed.
+
 ## [1.2.1] - 2026-05-15
 
 ### Fixed
