@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# aib — AI Barracks CLI v1.2.0
+# aib — AI Barracks CLI v1.2.3
 # Usage: aib <command> [args]
 #
 # Commands:
@@ -11,12 +11,12 @@
 #   barracks [list|remove|route|refresh]     Manage registered barracks
 #   status                                   Show active sessions and wiki stats
 #   sync [--dry-run] [path]                  Sync templates + protocol to barrack
-#   council [-r N] [-m MODE] "topic"         Run multi-LLM debate council
+#   council [-r N] [-m MODE] [--gemini] "topic"  Run multi-LLM debate council
 #   version                                  Show version
 
 set -euo pipefail
 
-AIB_VERSION="1.2.2"
+AIB_VERSION="1.2.3"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 
@@ -1270,12 +1270,14 @@ cmd_wiki_lint() {
 # ============================================================
 cmd_council() {
     if [ $# -eq 0 ]; then
-        log_err "Usage: aib council [-r rounds] [-m mode] \"topic\""
+        log_err "Usage: aib council [-r rounds] [-m mode] [--gemini] \"topic\""
         echo "  -r N       Number of debate rounds (default: 2)" >&2
         echo "  -m MODE    Mode: debate|adversarial|pipeline (default: debate)" >&2
+        echo "  --gemini   Include Gemini (default council is Claude+Codex)" >&2
         echo "" >&2
         echo "Examples:" >&2
         echo "  aib council \"REST vs gRPC\"" >&2
+        echo "  aib council --gemini \"Claude+Gemini+Codex comparison\"" >&2
         echo "  aib council -m adversarial -r 3 \"Kafka vs Pulsar\"" >&2
         exit 1
     fi
@@ -1943,7 +1945,7 @@ case "${1:-}" in
         echo "  skills doctor [path]           Validate SKILL.md frontmatter"
         echo "  skills check [path]            Detect W1/W2 drift (used by 'aib start')"
         echo "  sync [--dry-run] [path]        Sync templates + protocol to barrack"
-        echo "  council [-r N] [-m MODE] \"topic\"  Run multi-LLM debate council"
+        echo "  council [-r N] [-m MODE] [--gemini] \"topic\"  Run multi-LLM debate council"
         echo "  version                        Show version"
         ;;
     *)

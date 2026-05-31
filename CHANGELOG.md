@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.2.3] - 2026-05-31
+
+### Changed
+- **Council defaults**: `aib council` now defaults to Claude Opus 4.8 with high effort + Codex GPT-5.5 with medium reasoning effort. Gemini is disabled by default and can be opted in with `--gemini`.
+- **Codex council invocation**: removed the legacy `--profile council` dependency and passes model/reasoning effort directly to `codex exec`.
+
+### Fixed
+- **Council JSON output**: suppress the decorative banner when `--json` is used so stdout remains parseable JSON.
+- **Council watchdog cleanup**: watchdog sleep processes no longer hold command-substitution pipes open during final synthesis, preventing delayed/hung completion and orphaned `sleep 300` processes.
+
+### Tests
+- `tests/test_council_defaults.sh` — pins Claude/Codex default model+effort, Gemini opt-in behavior, JSON stdout purity, and watchdog cleanup with stubbed CLIs.
+
 ## [1.2.2] - 2026-05-15
 
 ### Fixed

@@ -2,8 +2,9 @@
 #
 # council.sh v2 - LLM Council: 멀티라운드 디베이트 시스템
 #
-# 3개 AI CLI(Claude Code, Gemini CLI, Codex CLI)를 병렬 실행하여
+# 기본 2개 AI CLI(Claude Code, Codex CLI)를 병렬 실행하여
 # 멀티라운드 교차 리뷰 후 최종 합의안을 도출합니다.
+# Gemini CLI는 현재 기본 제외이며, 필요 시 --gemini로 명시 포함합니다.
 #
 # 사용법:
 #   council.sh [옵션] "토론 주제"
@@ -18,7 +19,8 @@
 #   --consensus N           합의도 임계값 0-100, 0=비활성 (기본: 85)
 #   --resume SESSION_ID     중단된 세션 재개
 #   --no-claude             Claude 제외
-#   --no-gemini             Gemini 제외
+#   --gemini                Gemini 포함 (기본 제외)
+#   --no-gemini             Gemini 제외 (기본값)
 #   --no-codex              Codex 제외
 #   --timeout SECONDS       전체 CLI 타임아웃 (기본: 300)
 #   --timeout-claude N      Claude 전용 타임아웃
@@ -39,9 +41,9 @@ VERBOSE=false
 JSON_OUTPUT=false
 CONSENSUS_THRESHOLD=85
 RESUME_SESSION=""
-USE_CLAUDE=true
-USE_GEMINI=true
-USE_CODEX=true
+USE_CLAUDE="${AIB_COUNCIL_USE_CLAUDE:-true}"
+USE_GEMINI="${AIB_COUNCIL_USE_GEMINI:-false}"
+USE_CODEX="${AIB_COUNCIL_USE_CODEX:-true}"
 TIMEOUT=300
 TIMEOUT_CLAUDE=""
 TIMEOUT_GEMINI=""
@@ -49,18 +51,25 @@ TIMEOUT_CODEX=""
 GRACE_PERIOD=0
 DISABLED_AGENTS=()
 
-# Claude Code 내부 실행 감지: claude -p 중첩 호출 불가
+# Claude Code 내부 실행 감지.
+# 기본은 Claude CLI를 별도 `claude -p` 프로세스로 참여시킨다.
+# 과거 방식(Claude Code 내부에서 Claude 제외)이 필요하면
+# AIB_COUNCIL_DISABLE_CLAUDE_IN_CLAUDECODE=1 로 되돌릴 수 있다.
 if [[ "${CLAUDECODE:-0}" == "1" ]]; then
-    USE_CLAUDE=false
     INSIDE_CLAUDE_CODE=true
+    if [[ "${AIB_COUNCIL_DISABLE_CLAUDE_IN_CLAUDECODE:-0}" == "1" ]]; then
+        USE_CLAUDE=false
+    fi
 else
     INSIDE_CLAUDE_CODE=false
 fi
 
 # 모델 설정
-CLAUDE_MODEL="claude-opus-4-6"
-GEMINI_MODEL="gemini-3.1-pro-preview"
-CODEX_PROFILE="council"
+CLAUDE_MODEL="${AIB_COUNCIL_CLAUDE_MODEL:-claude-opus-4-8}"
+CLAUDE_EFFORT="${AIB_COUNCIL_CLAUDE_EFFORT:-high}"
+GEMINI_MODEL="${AIB_COUNCIL_GEMINI_MODEL:-gemini-3.1-pro-preview}"
+CODEX_MODEL="${AIB_COUNCIL_CODEX_MODEL:-gpt-5.5}"
+CODEX_EFFORT="${AIB_COUNCIL_CODEX_EFFORT:-medium}"
 
 # 색상 — stdout이 TTY가 아니면 비활성화 (Slack 등 파이프 환경)
 if [[ -t 1 ]]; then
@@ -83,15 +92,15 @@ log_ok()    { echo -e "${GREEN}[Council]${NC} $*" >&2; }
 log_warn()  { echo -e "${YELLOW}[Council]${NC} $*" >&2; }
 log_error() { echo -e "${RED}[Council]${NC} $*" >&2; }
 
-label_claude() { echo -e "${PURPLE}[Claude/Opus-4.6]${NC}"; }
+label_claude() { echo -e "${PURPLE}[Claude/Opus-4.8/${CLAUDE_EFFORT}]${NC}"; }
 label_gemini() { echo -e "${CYAN}[Gemini/3.1-Pro-Preview]${NC}"; }
-label_codex()  { echo -e "${GREEN}[Codex/GPT-5.4]${NC}"; }
+label_codex()  { echo -e "${GREEN}[Codex/GPT-5.5/${CODEX_EFFORT}]${NC}"; }
 
 agent_label() {
     case "$1" in
-        claude) echo "Claude/Opus-4.6" ;;
+        claude) echo "Claude/Opus-4.8/${CLAUDE_EFFORT}" ;;
         gemini) echo "Gemini/3.1-Pro-Preview" ;;
-        codex)  echo "Codex/GPT-5.4" ;;
+        codex)  echo "Codex/GPT-5.5/${CODEX_EFFORT}" ;;
     esac
 }
 
@@ -101,6 +110,23 @@ agent_timeout() {
         gemini) echo "${TIMEOUT_GEMINI:-$TIMEOUT}" ;;
         codex)  echo "${TIMEOUT_CODEX:-$TIMEOUT}" ;;
     esac
+}
+
+start_watchdog() {
+    local target_pid="$1"
+    local tout="$2"
+    local killed_marker="$3"
+
+    (
+        local sleep_pid=""
+        trap '[[ -n "${sleep_pid:-}" ]] && kill "$sleep_pid" 2>/dev/null; exit 0' TERM INT
+        sleep "$tout" &
+        sleep_pid=$!
+        wait "$sleep_pid" 2>/dev/null || exit 0
+        touch "$killed_marker"
+        kill "$target_pid" 2>/dev/null
+    ) >/dev/null 2>&1 &
+    WATCHDOG_PID=$!
 }
 
 # ── 토큰 & 한도 모니터링 ─────────────────────────────
@@ -208,7 +234,7 @@ LLM Council v2 - 멀티라운드 디베이트 시스템
 모드:
   debate (기본)    자유 토론 + 교차 리뷰 (창의적 발상 + 체계적 검토)
   adversarial      매 라운드 1명이 반대론자(Devil's Advocate) 역할
-  pipeline         역할 고정 순차 실행 (Gemini 계획 → Claude 구현 → Codex 리뷰)
+  pipeline         역할 고정 순차 실행 (Claude 계획/구현 → Codex 리뷰, --gemini 시 Gemini 계획)
 
 옵션:
   -r, --rounds N          토론 라운드 수 (기본: 2)
@@ -219,7 +245,8 @@ LLM Council v2 - 멀티라운드 디베이트 시스템
   --consensus N           합의도 임계값 (기본: 85, 0=비활성)
   --resume SESSION_ID     중단된 세션 재개
   --no-claude             Claude 제외
-  --no-gemini             Gemini 제외
+  --gemini                Gemini 포함 (기본 제외)
+  --no-gemini             Gemini 제외 (기본값)
   --no-codex              Codex 제외
   --timeout SECONDS       전체 CLI 타임아웃 (기본: 300)
   --timeout-claude N      Claude 전용 타임아웃
@@ -253,6 +280,7 @@ while [[ $# -gt 0 ]]; do
         --consensus)         CONSENSUS_THRESHOLD="$2"; shift 2 ;;
         --resume)            RESUME_SESSION="$2"; shift 2 ;;
         --no-claude)         USE_CLAUDE=false; shift ;;
+        --gemini)            USE_GEMINI=true; shift ;;
         --no-gemini)         USE_GEMINI=false; shift ;;
         --no-codex)          USE_CODEX=false; shift ;;
         --timeout)           TIMEOUT="$2"; shift 2 ;;
@@ -378,6 +406,11 @@ init_manifest() {
         --argjson use_claude "$( $USE_CLAUDE && echo true || echo false )" \
         --argjson use_gemini "$( $USE_GEMINI && echo true || echo false )" \
         --argjson use_codex "$( $USE_CODEX && echo true || echo false )" \
+        --arg claude_model "$CLAUDE_MODEL" \
+        --arg claude_effort "$CLAUDE_EFFORT" \
+        --arg gemini_model "$GEMINI_MODEL" \
+        --arg codex_model "$CODEX_MODEL" \
+        --arg codex_effort "$CODEX_EFFORT" \
         '{
             version: "2.0",
             session_id: $sid,
@@ -388,9 +421,9 @@ init_manifest() {
                 timeout: $timeout,
                 consensus_threshold: $consensus,
                 agents: {
-                    claude: { enabled: $use_claude, model: "opus" },
-                    gemini: { enabled: $use_gemini, model: "gemini-3.1-pro-preview" },
-                    codex:  { enabled: $use_codex, model: "gpt-5.4" }
+                    claude: { enabled: $use_claude, model: $claude_model, effort: $claude_effort },
+                    gemini: { enabled: $use_gemini, model: $gemini_model },
+                    codex:  { enabled: $use_codex, model: $codex_model, effort: $codex_effort }
                 }
             },
             started_at: $started,
@@ -487,10 +520,10 @@ call_claude() {
     local killed_marker="${outfile}.killed"
     rm -f "$killed_marker"
 
-    claude -p "$prompt" --model "$CLAUDE_MODEL" --output-format text --no-session-persistence --permission-mode bypassPermissions > "$outfile" 2>"$stderr_file" &
+    claude -p "$prompt" --model "$CLAUDE_MODEL" --effort "$CLAUDE_EFFORT" --output-format text --no-session-persistence --permission-mode bypassPermissions > "$outfile" 2>"$stderr_file" &
     local cmd_pid=$!
-    ( sleep "$tout" && touch "$killed_marker" && kill "$cmd_pid" 2>/dev/null ) &
-    local watchdog_pid=$!
+    start_watchdog "$cmd_pid" "$tout" "$killed_marker"
+    local watchdog_pid=$WATCHDOG_PID
 
     local exit_code=0
     wait "$cmd_pid" 2>/dev/null || exit_code=$?
@@ -531,8 +564,8 @@ call_gemini() {
     local raw_json="${outfile}.raw.json"
     gemini -p "$prompt" -m "$GEMINI_MODEL" -o json --yolo > "$raw_json" 2>"$stderr_file" &
     local cmd_pid=$!
-    ( sleep "$tout" && touch "$killed_marker" && kill "$cmd_pid" 2>/dev/null ) &
-    local watchdog_pid=$!
+    start_watchdog "$cmd_pid" "$tout" "$killed_marker"
+    local watchdog_pid=$WATCHDOG_PID
 
     local exit_code=0
     wait "$cmd_pid" 2>/dev/null || exit_code=$?
@@ -579,10 +612,10 @@ call_codex() {
     local session_before
     session_before=$(ls -t ~/.codex/sessions/2026/*/*/rollout-*.jsonl 2>/dev/null | head -1) || true
 
-    codex exec --profile "$CODEX_PROFILE" --dangerously-bypass-approvals-and-sandbox -C /tmp --skip-git-repo-check --ephemeral "$prompt" > "$outfile" 2>"$stderr_file" &
+    codex exec --model "$CODEX_MODEL" -c "model_reasoning_effort=\"${CODEX_EFFORT}\"" --dangerously-bypass-approvals-and-sandbox -C /tmp --skip-git-repo-check --ephemeral "$prompt" > "$outfile" 2>"$stderr_file" &
     local cmd_pid=$!
-    ( sleep "$tout" && touch "$killed_marker" && kill "$cmd_pid" 2>/dev/null ) &
-    local watchdog_pid=$!
+    start_watchdog "$cmd_pid" "$tout" "$killed_marker"
+    local watchdog_pid=$WATCHDOG_PID
 
     local exit_code=0
     wait "$cmd_pid" 2>/dev/null || exit_code=$?
@@ -766,9 +799,9 @@ build_synthesis_prompt() {
     local all_rounds="$1"
     local agent_count=$ACTIVE_COUNT
     local agent_names=""
-    $USE_CLAUDE && agent_names+="Claude/Opus-4.6, "
+    $USE_CLAUDE && agent_names+="$(agent_label claude), "
     $USE_GEMINI && agent_names+="Gemini/3.1-Pro-Preview, "
-    $USE_CODEX && agent_names+="Codex/GPT-5.4, "
+    $USE_CODEX && agent_names+="$(agent_label codex), "
     agent_names="${agent_names%, }"
 
     cat <<EOF
@@ -797,7 +830,7 @@ collect_previous_opinions() {
 
     if $USE_CLAUDE && [[ -f "${SESSION_DIR}/r${round}_claude.md" ]] && validate_response "${SESSION_DIR}/r${round}_claude.md"; then
         opinions+="
-### 전문가 A — Claude/Opus-4.6
+### 전문가 A — $(agent_label claude)
 $(cat "${SESSION_DIR}/r${round}_claude.md")
 "
     fi
@@ -809,7 +842,7 @@ $(cat "${SESSION_DIR}/r${round}_gemini.md")
     fi
     if $USE_CODEX && [[ -f "${SESSION_DIR}/r${round}_codex.md" ]] && validate_response "${SESSION_DIR}/r${round}_codex.md"; then
         opinions+="
-### 전문가 C — Codex/GPT-5.4
+### 전문가 C — $(agent_label codex)
 $(cat "${SESSION_DIR}/r${round}_codex.md")
 "
     fi
@@ -868,7 +901,7 @@ EOF
     # 가장 빠른 에이전트로 점수 평가
     if $USE_GEMINI; then
         call_gemini "$scoring_prompt" "$score_file" 2>/dev/null || true
-    elif ! $INSIDE_CLAUDE_CODE && $USE_CLAUDE; then
+    elif $USE_CLAUDE; then
         call_claude "$scoring_prompt" "$score_file" 2>/dev/null || true
     elif $USE_CODEX; then
         call_codex "$scoring_prompt" "$score_file" 2>/dev/null || true
@@ -1174,18 +1207,18 @@ run_pipeline_mode() {
     # 에이전트 할당: planner, implementer, reviewer
     local planner="" implementer="" reviewer=""
     if $USE_GEMINI; then planner="gemini"
-    elif $USE_CLAUDE && ! $INSIDE_CLAUDE_CODE; then planner="claude"
+    elif $USE_CLAUDE; then planner="claude"
     elif $USE_CODEX; then planner="codex"
     fi
 
-    if $USE_CLAUDE && ! $INSIDE_CLAUDE_CODE; then implementer="claude"
+    if $USE_CLAUDE; then implementer="claude"
     elif $USE_CODEX; then implementer="codex"
     elif $USE_GEMINI; then implementer="gemini"
     fi
 
     if $USE_CODEX; then reviewer="codex"
     elif $USE_GEMINI && [[ "$planner" != "gemini" ]]; then reviewer="gemini"
-    elif $USE_CLAUDE && ! $INSIDE_CLAUDE_CODE && [[ "$implementer" != "claude" ]]; then reviewer="claude"
+    elif $USE_CLAUDE && [[ "$implementer" != "claude" ]]; then reviewer="claude"
     else reviewer="$planner"  # fallback: same agent reviews
     fi
 
@@ -1251,11 +1284,8 @@ $(collect_previous_opinions "$r")
     synthesis_prompt=$(build_synthesis_prompt "$all_rounds")
     local final_file="${SESSION_DIR}/final_synthesis.md"
 
-    if $INSIDE_CLAUDE_CODE; then
-        log_info "━━━ 라운드 결과 (Claude Code에서 종합 필요) ━━━"
-        echo "$all_rounds" > "$final_file"
-    elif $USE_CLAUDE; then
-        log_info "━━━ 최종 종합 (Claude/Opus-4.6) ━━━"
+    if $USE_CLAUDE; then
+        log_info "━━━ 최종 종합 ($(agent_label claude)) ━━━"
         if call_claude "$synthesis_prompt" "$final_file"; then
             log_ok "종합 완료"
         else
@@ -1276,7 +1306,7 @@ $(collect_previous_opinions "$r")
             collect_previous_opinions "$ROUNDS" > "$final_file"
         fi
     else
-        log_info "━━━ 최종 종합 (Codex/GPT-5.4) ━━━"
+        log_info "━━━ 최종 종합 ($(agent_label codex)) ━━━"
         if call_codex "$synthesis_prompt" "$final_file"; then
             log_ok "종합 완료"
         else
@@ -1400,17 +1430,23 @@ build_structured_report() {
 # ── 메인 실행 ──────────────────────────────────────────
 
 main() {
-    echo -e "${BOLD}"
-    echo "╔══════════════════════════════════════════╗"
-    echo "║   LLM Council v2 - 멀티라운드 디베이트    ║"
-    echo "╚══════════════════════════════════════════╝"
-    echo -e "${NC}"
+    if ! $JSON_OUTPUT; then
+        echo -e "${BOLD}"
+        echo "╔══════════════════════════════════════════╗"
+        echo "║   LLM Council v2 - 멀티라운드 디베이트    ║"
+        echo "╚══════════════════════════════════════════╝"
+        echo -e "${NC}"
+    fi
 
     log_info "주제: ${PROMPT}"
     log_info "모드: ${MODE} | 라운드: ${ROUNDS} | 합의 임계: ${CONSENSUS_THRESHOLD} | 유예: ${GRACE_PERIOD}s"
     log_info "에이전트: $($USE_CLAUDE && echo 'Claude ')$($USE_GEMINI && echo 'Gemini ')$($USE_CODEX && echo 'Codex')"
     if $INSIDE_CLAUDE_CODE; then
-        log_warn "Claude Code 내부 실행 감지 — Claude CLI 제외 (Claude Code가 직접 참여)"
+        if $USE_CLAUDE; then
+            log_warn "Claude Code 내부 실행 감지 — Claude CLI를 별도 프로세스로 참여시킵니다"
+        else
+            log_warn "Claude Code 내부 실행 감지 — 설정에 따라 Claude CLI 제외"
+        fi
     fi
     echo ""
 

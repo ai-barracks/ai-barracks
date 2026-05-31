@@ -1,6 +1,6 @@
 ---
 name: council
-description: "Use when an architectural decision, technology comparison, critical code review, or any high-stakes choice would benefit from cross-validation by 3 independent LLMs (Claude/Gemini/Codex). Triggers a multi-round debate via the upstream `ai-barracks/scripts/council.sh` and returns a synthesized consensus. Modes: debate (default 2 rounds), adversarial (devil's advocate rotation), pipeline (Gemini plans → Claude implements → Codex reviews)."
+description: "Use when an architectural decision, technology comparison, critical code review, or any high-stakes choice would benefit from cross-validation by independent LLMs. Defaults to Claude Opus 4.8 high + Codex GPT-5.5 medium; Gemini is optional via `--gemini`. Triggers a multi-round debate via upstream `ai-barracks/scripts/council.sh`."
 argument-hint: "<topic> [-m debate|adversarial|pipeline] [-r rounds] [--consensus N]"
 allowed-tools: Bash(./scripts/council.sh *), Bash(council.sh *), Read, Write
 aib_version: "1.1"
@@ -10,7 +10,7 @@ growth_origin: "manual"
 
 # LLM Council — 멀티라운드 교차 리뷰
 
-3개 AI(Claude Opus, Gemini 2.5 Pro, Codex GPT-5.3)가 같은 주제를 두고 멀티라운드 디베이트한 뒤 합의안을 도출한다. ai-barracks v1.1 표준 스킬의 reference 구현 — Anthropic Agent Skills 호환 frontmatter + ai-barracks 확장 필드 사용.
+기본 2개 AI(Claude Opus 4.8 high, Codex GPT-5.5 medium)가 같은 주제를 두고 멀티라운드 디베이트한 뒤 합의안을 도출한다. Gemini는 현재 기본 제외이며 필요 시 `--gemini`로 포함한다. ai-barracks v1.1 표준 스킬의 reference 구현 — Anthropic Agent Skills 호환 frontmatter + ai-barracks 확장 필드 사용.
 
 ## When to Invoke
 
@@ -43,9 +43,9 @@ council.sh --consensus 90 --json "ai-barracks v1.1 skills 스펙 검토"
 
 | Mode | 동작 | When |
 |------|------|------|
-| `debate` (default) | 3개 LLM 병렬 → 교차 리뷰 → 합의 | 일반 결정 |
+| `debate` (default) | Claude+Codex 병렬 → 교차 리뷰 → 합의 (`--gemini` 시 3자 토론) | 일반 결정 |
 | `adversarial` | 매 라운드 반대론자 1명 지정·순환 | 그룹 사고 회피 필요 |
-| `pipeline` | Gemini(plan) → Claude(impl) → Codex(review) | 역할 분담 명확한 작업 |
+| `pipeline` | Claude(plan/impl) → Codex(review), `--gemini` 시 Gemini(plan) | 역할 분담 명확한 작업 |
 
 ## Outputs
 
@@ -55,7 +55,7 @@ council.sh --consensus 90 --json "ai-barracks v1.1 skills 스펙 검토"
 
 ## Constraints
 
-- Claude/Gemini/Codex CLI가 모두 설치·인증되어 있어야 함
+- 기본 실행에는 Claude/Codex CLI가 설치·인증되어 있어야 함 (`--gemini` 사용 시 Gemini CLI도 필요)
 - 기본 타임아웃 300초 (대형 토픽은 `--timeout` 상향 필요)
 - 멀티라운드는 토큰 비용이 크다 — 사소한 결정에는 사용 자제
 
