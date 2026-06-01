@@ -318,20 +318,33 @@ _active_session_id() {
     head -n1 sessions/.active 2>/dev/null | tr -d '\r' | sed 's/[[:space:]]*$//'
 }
 
+# Portable in-place sed. The BSD form (`sed` + `-i` + empty suffix) is a silent no-op on
+# GNU/Linux, so every in-place edit goes through this tmp+mv helper instead.
+# Usage: _sed_inplace <file> <sed-args...>   (e.g. -e 's/a/b/' [-e ...])
+_sed_inplace() {
+    local file="$1"; shift
+    [ -f "$file" ] || return 0
+    local tmp mode
+    tmp="$(mktemp "${file}.XXXXXX" 2>/dev/null)" || return 1
+    if sed "$@" "$file" > "$tmp" 2>/dev/null; then
+        # mktemp is 0600; preserve the original mode so this is a faithful `sed -i` drop-in.
+        mode="$(stat -f '%Lp' "$file" 2>/dev/null || stat -c '%a' "$file" 2>/dev/null || true)"
+        if [ -n "$mode" ]; then chmod "$mode" "$tmp" 2>/dev/null || true; fi
+        mv "$tmp" "$file" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    else
+        rm -f "$tmp"; return 1
+    fi
+    return 0
+}
+
 # Mark a stuck-active session file as interrupted (idempotent; no-op unless Status: active).
-# Portable rewrite (tmp + mv) — `sed -i ''` is BSD-only and a silent no-op on GNU/Linux.
 _mark_interrupted() {
-    local sid="$1" md="sessions/${sid}.md" tmp
+    local sid="$1" md="sessions/${sid}.md"
     [ -f "$md" ] || return 0
     grep -q '^- \*\*Status\*\*: active' "$md" 2>/dev/null || return 0
-    tmp="$(mktemp "${md}.XXXXXX" 2>/dev/null)" || return 0
-    if sed -e 's/^- \*\*Status\*\*: active/- **Status**: interrupted/' \
-           -e "s/^- \*\*Ended\*\*: (active)/- **Ended**: $(date '+%Y-%m-%d %H:%M') (stale)/" \
-           "$md" > "$tmp" 2>/dev/null; then
-        mv "$tmp" "$md" 2>/dev/null || rm -f "$tmp"
-    else
-        rm -f "$tmp"
-    fi
+    _sed_inplace "$md" \
+        -e 's/^- \*\*Status\*\*: active/- **Status**: interrupted/' \
+        -e "s/^- \*\*Ended\*\*: (active)/- **Ended**: $(date '+%Y-%m-%d %H:%M') (stale)/"
     return 0
 }
 
@@ -796,8 +809,9 @@ inject_protocol() {
         fi
 
         # Normalize legacy MAP: markers
-        sed -i '' 's/<!-- MAP:SESSION-MEMORY-PROTOCOL -->/<!-- AIB:SESSION-MEMORY-PROTOCOL -->/' "$fpath" 2>/dev/null || true
-        sed -i '' 's/<!-- MAP:END -->/<!-- AIB:END -->/' "$fpath" 2>/dev/null || true
+        _sed_inplace "$fpath" \
+            -e 's/<!-- MAP:SESSION-MEMORY-PROTOCOL -->/<!-- AIB:SESSION-MEMORY-PROTOCOL -->/' \
+            -e 's/<!-- MAP:END -->/<!-- AIB:END -->/' || true
 
         # Extract user content (everything outside marker blocks and orphaned protocol)
         local user_content
@@ -1223,8 +1237,9 @@ cmd_hook_end() {
     # Update session file status
     local ctx_file="sessions/${session_id}.md"
     if [ -f "$ctx_file" ]; then
-        sed -i '' 's/^- \*\*Status\*\*: active/- **Status**: completed/' "$ctx_file" 2>/dev/null || true
-        sed -i '' "s/^- \*\*Ended\*\*: (active)/- **Ended**: $(date '+%Y-%m-%d %H:%M')/" "$ctx_file" 2>/dev/null || true
+        _sed_inplace "$ctx_file" \
+            -e 's/^- \*\*Status\*\*: active/- **Status**: completed/' \
+            -e "s/^- \*\*Ended\*\*: (active)/- **Ended**: $(date '+%Y-%m-%d %H:%M')/" || true
         log_info "Session marked completed: ${ctx_file}"
 
         # Growth validation: warn if meaningful work but no growth updates
@@ -1414,8 +1429,9 @@ cmd_start() {
 
         # 2. Mark completed
         if [ -f "$ctx_file" ]; then
-            sed -i '' 's/^- \*\*Status\*\*: active/- **Status**: completed/' "$ctx_file" 2>/dev/null || true
-            sed -i '' "s/^- \*\*Ended\*\*: (active)/- **Ended**: $(date '+%Y-%m-%d %H:%M')/" "$ctx_file" 2>/dev/null || true
+            _sed_inplace "$ctx_file" \
+                -e 's/^- \*\*Status\*\*: active/- **Status**: completed/' \
+                -e "s/^- \*\*Ended\*\*: (active)/- **Ended**: $(date '+%Y-%m-%d %H:%M')/" || true
         fi
 
         # 3. Summarize raw capture with LLM
@@ -1531,7 +1547,7 @@ cmd_wiki_lint() {
                         echo -e "  ${YELLOW}[STALE]${NC} ${f}: ${ds} — $(echo "$line" | head -c 80)" >&2
                         issues=$((issues + 1))
                         if $fix; then
-                            sed -i '' "s/\[${ds}\]/[${ds}] [STALE?]/" "$f"
+                            _sed_inplace "$f" -e "s/\[${ds}\]/[${ds}] [STALE?]/"
                         fi
                     fi
                 fi
@@ -1977,7 +1993,7 @@ sync_version_stamp() {
         if $dry_run; then
             log_info "[dry-run] Would update aib_version: $current → $AIB_VERSION"
         else
-            sed -i '' "s/^aib_version: .*/aib_version: ${AIB_VERSION}/" "$dest"
+            _sed_inplace "$dest" -e "s/^aib_version: .*/aib_version: ${AIB_VERSION}/"
             log_ok "Updated: aib_version $current → $AIB_VERSION"
         fi
     else
