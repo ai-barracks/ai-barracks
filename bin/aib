@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-AIB_VERSION="1.2.3"
+AIB_VERSION="1.3.0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 
@@ -257,15 +257,34 @@ cleanup_stale() {
     local now_epoch year stale_ids=""
     now_epoch=$(date +%s)
     year=$(date +%Y)
+    local strict="${AIB_CLEANUP_REQUIRE_LIVENESS:-}"
 
-    # Find stale session IDs
+    # Decision matrix (council FINAL): prefer process liveness over timestamp.
+    #   alive   -> keep, even past 2h     (fixes 변종 E — never reap a live session)
+    #   dead    -> reap immediately        (confident phantom, even if < 2h)
+    #   unknown -> legacy time rule (>2h)  unless strict mode keeps no-sidecar rows
     for sid in $(grep "^| [a-z]" "SESSIONS.md" 2>/dev/null | awk -F'|' '{print $2}' | tr -d ' '); do
-        local last_update
+        local liveness last_update epoch age_exceeded verdict
+        liveness="$(_session_is_alive "$sid")"
+
         last_update=$(grep "^| ${sid} " "SESSIONS.md" | awk -F'|' '{print $5}' | tr -d ' ')
-        [ -z "$last_update" ] && continue
-        local epoch
-        epoch=$(date -j -f "%Y-%m-%d %H:%M" "${year}-${last_update}" +%s 2>/dev/null || echo "0")
-        if [ "$epoch" -gt 0 ] && [ $((now_epoch - epoch)) -gt 7200 ]; then
+        age_exceeded=0
+        if [ -n "$last_update" ]; then
+            epoch=$(date -j -f "%Y-%m-%d %H:%M" "${year}-${last_update}" +%s 2>/dev/null \
+                    || date -d "${year}-${last_update}" +%s 2>/dev/null || echo "0")
+            [ "$epoch" -gt 0 ] && [ $((now_epoch - epoch)) -gt 7200 ] && age_exceeded=1
+        fi
+
+        verdict=keep
+        case "$liveness" in
+            alive) verdict=keep ;;
+            dead)  verdict=reap ;;
+            *)     if [ -n "$strict" ]; then verdict=keep
+                   elif [ "$age_exceeded" = 1 ]; then verdict=reap
+                   else verdict=keep; fi ;;
+        esac
+
+        if [ "$verdict" = reap ]; then
             stale_ids="${stale_ids} ${sid}"
             # Mark session file as interrupted
             if [ -f "sessions/${sid}.md" ]; then
@@ -275,7 +294,7 @@ cleanup_stale() {
         fi
     done
 
-    # Remove stale entries
+    # Remove reaped entries
     if [ -n "$stale_ids" ]; then
         local tmp="SESSIONS.md.tmp"
         cp "SESSIONS.md" "$tmp"
@@ -284,9 +303,182 @@ cleanup_stale() {
             mv "${tmp}.2" "$tmp"
         done
         mv "$tmp" "SESSIONS.md"
-        log_info "Cleaned stale sessions:${stale_ids}"
+        log_info "Cleaned stale (dead/timed-out) sessions:${stale_ids}"
     fi
     return 0
+}
+
+# ============================================================
+# Agent liveness — sidecar writer + reconcile (v1: Claude hook)
+# Spec: wiki/topics/agent-liveness-design.md ; plan + council FINAL integration.
+# ============================================================
+
+# Resolve the agent PID by walking up from $PPID to the first ancestor whose
+# comm matches the client (claude/codex/gemini). Echoes "PID CONFIDENCE".
+# Honors AIB_LIVE_PID override (deterministic tests). Fallback: $PPID, low.
+_aib_anchor_pid() {
+    local client="${1:-claude}"
+    if [ -n "${AIB_LIVE_PID:-}" ]; then echo "${AIB_LIVE_PID} high"; return 0; fi
+    local p="${PPID:-$$}" hops=0 comm base
+    while [ -n "$p" ] && [ "$p" -gt 1 ] && [ "$hops" -lt 8 ]; do
+        comm="$(ps -o comm= -p "$p" 2>/dev/null)"
+        base="${comm##*/}"
+        if [ "$base" = "$client" ]; then echo "$p high"; return 0; fi
+        p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+        hops=$((hops + 1))
+    done
+    echo "${PPID:-$$} low"
+}
+
+# Process start time (lstart), whitespace-normalized for stable string compare.
+# Honors AIB_LIVE_LSTART override (deterministic tests).
+_aib_lstart() {
+    local pid="$1"
+    if [ -n "${AIB_LIVE_LSTART:-}" ]; then
+        echo "${AIB_LIVE_LSTART}" | tr -s ' ' | sed 's/^ *//;s/ *$//'
+        return 0
+    fi
+    ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'
+}
+
+# Write/refresh a session liveness sidecar atomically (temp + rename).
+# Usage: aib_live_write <session_id> <state> <event> <reason>
+# pid/lstart resolved via anchor walk (override: AIB_LIVE_PID / AIB_LIVE_LSTART).
+# run_id preserved from existing .status unless event==SessionStart or no file.
+aib_live_write() {
+    local sid="${1:-}" state="${2:-}" event="${3:-}" reason="${4:-null}"
+    if [ -z "$sid" ] || [ -z "$state" ] || [ -z "$event" ]; then return 0; fi  # best-effort: never crash a hook
+    local client="${AIB_LIVE_CLIENT:-claude}"
+    local live_dir="sessions/.live"
+    local f="${live_dir}/${sid}.status"
+    local now pid conf lstart comm run_id tmp cwd
+    mkdir -p "$live_dir"
+    now="$(date +%s)"
+    read -r pid conf <<<"$(_aib_anchor_pid "$client")"
+    lstart="$(_aib_lstart "$pid")"
+    comm="$(ps -o comm= -p "$pid" 2>/dev/null | tr -d ' ')"; comm="${comm##*/}"
+    [ -z "$comm" ] && comm="$client"
+    cwd="$(pwd)"
+    if [ "$event" = "SessionStart" ] || [ ! -f "$f" ]; then
+        run_id="${now}-${pid}-${RANDOM}"
+    else
+        run_id="$(jq -r '.run_id // empty' "$f" 2>/dev/null)"
+        [ -z "$run_id" ] && run_id="${now}-${pid}"
+    fi
+    tmp="$(mktemp "${live_dir}/.${sid}.XXXXXX")" || return 1
+    jq -n \
+        --argjson version 1 \
+        --arg sid "$sid" --arg run_id "$run_id" \
+        --arg state "$state" --arg event "$event" --arg reason "$reason" \
+        --arg source "${client}_hook" --arg confidence "$conf" \
+        --arg lstart "$lstart" --arg comm "$comm" --arg cwd "$cwd" \
+        --argjson ts "$now" --argjson pid "$pid" \
+        '{version:$version, session_id:$sid, run_id:$run_id, state:$state,
+          event:$event, reason:(if $reason=="null" then null else $reason end),
+          source:$source, confidence:$confidence, lstart:$lstart, comm:$comm,
+          cwd:$cwd, ts:$ts, pid:$pid}' \
+        > "$tmp" 2>/dev/null
+    if jq empty "$tmp" 2>/dev/null; then
+        mv "$tmp" "$f"          # atomic on same filesystem
+    else
+        rm -f "$tmp"; return 1
+    fi
+}
+
+# Reconcile a session's liveness from its sidecar: echoes alive|dead|unknown.
+#   alive   = kill -0 pid succeeds AND stored lstart == current lstart
+#   dead    = pid gone, OR pid alive but lstart mismatch (PID reuse)
+#   unknown = no sidecar / no pid / ps unavailable for a live-looking pid
+_session_is_alive() {
+    local sid="$1"
+    local f="sessions/.live/${sid}.status"
+    [ -f "$f" ] || { echo "unknown"; return 0; }
+    local pid stored_lstart cur_lstart
+    pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
+    [ -z "$pid" ] && { echo "unknown"; return 0; }
+    if ! kill -0 "$pid" 2>/dev/null; then echo "dead"; return 0; fi
+    stored_lstart="$(jq -r '.lstart // empty' "$f" 2>/dev/null)"
+    cur_lstart="$(ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+    [ -z "$cur_lstart" ] && { echo "alive"; return 0; }     # kill -0 ok but ps failed: conservative alive (fail-safe — never reap a live pid)
+    if [ -n "$stored_lstart" ] && [ "$stored_lstart" != "$cur_lstart" ]; then
+        echo "dead"; return 0
+    fi
+    echo "alive"
+}
+
+# Fold a session liveness sidecar into an effective state word (display-time).
+# Usage: cmd_session_state <id> [--json]
+# Uses kill -0 (design.md "kill -0 primary"); lstart reuse guard is reserved for
+# the destructive cleanup_stale path, not this read-only display fold.
+cmd_session_state() {
+    local id="${1:-}"; local want_json=""
+    [ "${2:-}" = "--json" ] && want_json=1
+    [ -z "$id" ] && { log_err "Usage: aib sessions state <id> [--json]"; return 1; }
+    local f="sessions/.live/${id}.status"
+    if [ ! -f "$f" ]; then
+        [ -n "$want_json" ] && echo '{"effective":"none"}' || echo "none"; return 0
+    fi
+    local state run_id ts pid now age alive acked eff stale_w
+    # Defensive: corrupt/unreadable JSON must yield 'unknown', not crash under set -e.
+    state="$(jq -r '.state // empty' "$f" 2>/dev/null)" || state=""
+    run_id="$(jq -r '.run_id // empty' "$f" 2>/dev/null)" || run_id=""
+    ts="$(jq -r '.ts // 0' "$f" 2>/dev/null)" || ts=0
+    pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)" || pid=""
+    if [ -z "$state" ] || [ -z "$pid" ]; then
+        [ -n "$want_json" ] && echo '{"effective":"unknown"}' || echo "unknown"; return 0
+    fi
+    case "$ts" in ''|*[!0-9]*) ts=0 ;; esac   # non-numeric guard
+    now="$(date +%s)"; age=$(( now - ts ))
+    stale_w="${AIB_LIVE_STALE_WORKING:-180}"
+    if kill -0 "$pid" 2>/dev/null; then alive=1; else alive=0; fi
+    acked=0
+    local af="sessions/.live/${id}.ack"
+    if [ -f "$af" ] && [ "$(jq -r '.acked_run_id // empty' "$af")" = "$run_id" ]; then acked=1; fi
+    case "$state" in
+        done)    if [ "$acked" = 1 ]; then eff=idle; else eff=done; fi ;;
+        blocked) if [ "$alive" = 1 ]; then eff=blocked; else eff=crashed; fi ;;
+        working) if [ "$alive" = 0 ]; then eff=interrupted
+                 elif [ "$age" -gt "$stale_w" ]; then eff=working_stale
+                 else eff=working; fi ;;
+        *)       eff=unknown ;;
+    esac
+    if [ -n "$want_json" ]; then
+        jq -n --arg eff "$eff" --arg state "$state" --argjson age "$age" \
+              --argjson alive "$alive" --argjson pid "$pid" --arg run_id "$run_id" \
+          '{effective:$eff, state:$state, age_sec:$age, pid_alive:($alive==1), pid:$pid, run_id:$run_id}'
+    else
+        echo "$eff"
+    fi
+}
+
+# Map a Claude Code hook event to a liveness state for the active session.
+# Usage: cmd_hook_event <client> <EventName>  (stdin may carry the hook JSON payload)
+cmd_hook_event() {
+    local client="${1:-claude}" event="${2:-}"
+    [ -z "$event" ] && return 0
+    [ -f "sessions/.active" ] || return 0          # no active session: silent no-op
+    local sid; sid="$(cat sessions/.active 2>/dev/null)"
+    [ -z "$sid" ] && return 0
+    local state reason
+    case "$event" in
+        SessionStart)            state=working; reason=session_start ;;
+        PreToolUse|PostToolUse)  state=working; reason=tool_activity ;;
+        Notification)            state=blocked; reason=approval_required ;;
+        Stop|SessionEnd)         state=done;    reason=turn_complete ;;
+        SubagentStop)            return 0 ;;       # subagent end != session end
+        *)                       return 0 ;;
+    esac
+    # Note: if Notification over-fires (Task 1 risk), read stdin payload here and
+    # only map to blocked on an approval/input pattern. v1 maps unconditionally.
+    AIB_LIVE_CLIENT="$client" aib_live_write "$sid" "$state" "$event" "$reason" || true
+    return 0
+}
+
+# Ensure the ephemeral liveness sidecar dir is git-ignored (cwd .gitignore).
+ensure_live_gitignore() {
+    local gi=".gitignore"
+    [ -f "$gi" ] || touch "$gi"
+    grep -qx 'sessions/.live/' "$gi" 2>/dev/null || printf 'sessions/.live/\n' >> "$gi"
 }
 
 # ============================================================
@@ -342,6 +534,8 @@ cmd_init() {
         echo -e "\n# MAP (ephemeral session index)\nSESSIONS.md" >> "$gitignore"
         log_ok "Updated .gitignore (SESSIONS.md)"
     fi
+    # liveness sidecar dir (ephemeral, never committed)
+    grep -qx 'sessions/.live/' "$gitignore" 2>/dev/null || { printf 'sessions/.live/\n' >> "$gitignore"; log_ok "Updated .gitignore (sessions/.live/)"; }
 
     # 5. agent.yaml (GitAgent 호환)
     local ws_name
@@ -396,25 +590,36 @@ configure_hooks() {
 
     # Claude Code
     if command -v claude &>/dev/null; then
-        local claude_settings="$HOME/.claude/settings.json"
-        if [ -f "$claude_settings" ]; then
-            if grep -q "aib hook" "$claude_settings" 2>/dev/null; then
-                log_warn "Claude hooks already configured"
+        local claude_settings="${AIB_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+        mkdir -p "$(dirname "$claude_settings")" 2>/dev/null || true
+        [ -f "$claude_settings" ] || echo '{}' > "$claude_settings"
+        if command -v jq &>/dev/null; then
+            local tmp="${claude_settings}.tmp"
+            # ensure(ev;cmd): idempotently add a command hook (no duplicates on re-run).
+            # SessionStart/End drive session lifecycle; Pre/Post/Notification/Stop drive liveness.
+            jq \
+              --arg start "aib hook start claude" \
+              --arg end "aib hook end claude" \
+              --arg pre "aib hook event claude PreToolUse" \
+              --arg post "aib hook event claude PostToolUse" \
+              --arg notif "aib hook event claude Notification" \
+              --arg stop "aib hook event claude Stop" \
+              'def ensure(ev; cmd):
+                 .hooks[ev] = ((.hooks[ev] // [])
+                   | if any(.[]?; .hooks[]?.command == cmd) then . else . + [{matcher:"",hooks:[{type:"command",command:cmd}]}] end);
+               .hooks = (.hooks // {})
+               | ensure("SessionStart"; $start) | ensure("SessionEnd"; $end)
+               | ensure("PreToolUse"; $pre)     | ensure("PostToolUse"; $post)
+               | ensure("Notification"; $notif) | ensure("Stop"; $stop)' \
+              "$claude_settings" > "$tmp" 2>/dev/null
+            if jq empty "$tmp" 2>/dev/null; then
+                mv "$tmp" "$claude_settings"
+                log_ok "Claude Code hooks configured (SessionStart/End + liveness events)"
             else
-                # Use jq to add hooks if available, otherwise inform user
-                if command -v jq &>/dev/null; then
-                    local tmp="${claude_settings}.tmp"
-                    jq '.hooks = (.hooks // {}) |
-                        .hooks.SessionStart = (.hooks.SessionStart // []) + [{"matcher": "", "hooks": [{"type": "command", "command": "aib hook start claude"}]}] |
-                        .hooks.SessionEnd = (.hooks.SessionEnd // []) + [{"matcher": "", "hooks": [{"type": "command", "command": "aib hook end claude"}]}]' \
-                        "$claude_settings" > "$tmp" && mv "$tmp" "$claude_settings"
-                    log_ok "Claude Code hooks configured (SessionStart + SessionEnd)"
-                else
-                    log_warn "jq not found — add Claude hooks manually to ~/.claude/settings.json"
-                fi
+                rm -f "$tmp"; log_err "configure_hooks: jq failed for $claude_settings"
             fi
         else
-            log_warn "~/.claude/settings.json not found"
+            log_warn "jq not found — add Claude hooks manually to ~/.claude/settings.json"
         fi
     else
         log_info "Claude Code not installed, skipping"
@@ -422,7 +627,7 @@ configure_hooks() {
 
     # Gemini CLI
     if command -v gemini &>/dev/null; then
-        local gemini_settings="$HOME/.gemini/settings.json"
+        local gemini_settings="${AIB_GEMINI_SETTINGS:-$HOME/.gemini/settings.json}"
         if [ -f "$gemini_settings" ]; then
             if grep -q "aib hook" "$gemini_settings" 2>/dev/null; then
                 log_warn "Gemini hooks already configured"
@@ -726,7 +931,10 @@ cmd_hook_start() {
 
     ensure_sessions_md
     ensure_sessions_dir
-    cleanup_stale
+    # Liveness: record THIS session's sidecar BEFORE cleanup_stale scans (ordering invariant).
+    ensure_live_gitignore || true
+    aib_live_write "$session_id" "working" "SessionStart" "session_start" || true
+    cleanup_stale || true   # cleanup/liveness must never abort session start
 
     # Refresh this barrack's metadata in registry (picks up SOUL.md/wiki changes)
     local barrack_path
@@ -893,6 +1101,9 @@ cmd_hook_end() {
     mv "$tmp" "SESSIONS.md"
     rm -f "sessions/.active"
     log_info "Session unregistered: ${session_id}"
+
+    # Liveness: mark sidecar done (final state) before flipping the session file.
+    aib_live_write "$session_id" "done" "SessionEnd" "turn_complete" || true
 
     # Update session file status
     local ctx_file="sessions/${session_id}.md"
@@ -1885,6 +2096,9 @@ cmd_skills_check() {
     fi
 }
 
+# --- testability: allow `source bin/aib` to load functions only ---
+if [ -n "${AIB_SOURCE_ONLY:-}" ]; then return 0 2>/dev/null || true; fi
+
 # ============================================================
 # Main
 # ============================================================
@@ -1897,7 +2111,8 @@ case "${1:-}" in
             start)    shift; cmd_hook_start "$@" ;;
             end)      shift; cmd_hook_end "$@" ;;
             continue) shift; cmd_hook_continue "$@" ;;
-            *)        log_err "Usage: aib hook <start|end|continue> [args]"; exit 1 ;;
+            event)    shift; cmd_hook_event "$@" ;;
+            *)        log_err "Usage: aib hook <start|end|continue|event> [args]"; exit 1 ;;
         esac
         ;;
     status)  cmd_status ;;
@@ -1908,7 +2123,8 @@ case "${1:-}" in
         shift
         case "${1:-}" in
             clean) shift; cmd_sessions_clean "$@" ;;
-            *)     log_err "Usage: aib sessions <clean> [--dry-run]"; exit 1 ;;
+            state) shift; cmd_session_state "$@" ;;
+            *)     log_err "Usage: aib sessions <clean|state> [args]"; exit 1 ;;
         esac
         ;;
     wiki)
