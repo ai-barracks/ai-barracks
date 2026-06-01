@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-AIB_VERSION="1.3.0"
+AIB_VERSION="1.3.1"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 
@@ -433,7 +433,15 @@ cmd_session_state() {
     if kill -0 "$pid" 2>/dev/null; then alive=1; else alive=0; fi
     acked=0
     local af="sessions/.live/${id}.ack"
-    if [ -f "$af" ] && [ "$(jq -r '.acked_run_id // empty' "$af")" = "$run_id" ]; then acked=1; fi
+    if [ -f "$af" ]; then
+        local ack_rid ack_ts_v
+        ack_rid="$(jq -r '.acked_run_id // empty' "$af" 2>/dev/null)"
+        ack_ts_v="$(jq -r '.ack_ts // 0' "$af" 2>/dev/null)"
+        [[ "$ack_ts_v" =~ ^[0-9]+$ ]] || ack_ts_v=0
+        # ack must match the run AND not predate this status: aib reuses one run_id
+        # across a session's turns, so a later done than the ack is a new turn-end.
+        if [ "$ack_rid" = "$run_id" ] && [ "$ack_ts_v" -ge "$ts" ]; then acked=1; fi
+    fi
     case "$state" in
         done)    if [ "$acked" = 1 ]; then eff=idle; else eff=done; fi ;;
         blocked) if [ "$alive" = 1 ]; then eff=blocked; else eff=crashed; fi ;;

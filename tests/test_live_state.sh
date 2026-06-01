@@ -69,8 +69,12 @@ mk_status w3 working "$NOW" 999999
 [ "$("$AIB_BIN" sessions state w3)" = "interrupted" ] || fail "working+dead -> interrupted"
 mk_status d1 done "$NOW" $$
 [ "$("$AIB_BIN" sessions state d1)" = "done" ] || fail "done unacked"
-jq -n '{version:1,acked_run_id:"r-d1",ack_ts:1}' > sessions/.live/d1.ack
-[ "$("$AIB_BIN" sessions state d1)" = "idle" ] || fail "done+ack -> idle"
+jq -n --argjson t "$NOW" '{version:1,acked_run_id:"r-d1",ack_ts:$t}' > sessions/.live/d1.ack
+[ "$("$AIB_BIN" sessions state d1)" = "idle" ] || fail "done+ack(ack_ts>=ts) -> idle"
+# ack staleness (Codex MAJOR; aib-cc parity): aib reuses one run_id across a session's
+# turns, so a LATER done (ts after the ack) in the SAME run_id must NOT be pre-acked.
+mk_status d1 done $((NOW+50)) $$
+[ "$("$AIB_BIN" sessions state d1)" = "done" ] || fail "later done in same run must not be pre-acked"
 [ "$("$AIB_BIN" sessions state nope)" = "none" ] || fail "missing -> none"
 pass "cmd_session_state fold matrix"
 

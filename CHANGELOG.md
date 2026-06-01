@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.1] - 2026-06-01
+
+### Fixed — Liveness ack staleness (aib-cc v1.4.0 parity)
+- **`aib sessions state`의 ack 판정이 `run_id`만 비교해, 한 세션의 여러 턴(aib는 SessionStart에만 run_id 발급 → 턴마다 동일 run_id)에서 첫 `done`을 ack하면 후속 `done`까지 `idle`로 묻히던 버그 수정.** acked 판정에 `ack_ts >= status.ts`를 추가 — ack 이후의 새 `done`(더 큰 ts)은 다시 `done`으로 표시. aib-cc v1.4.0 fold와 정합(설계 함정 9 = fold divergence 해소).
+
+### Tests
+- `tests/test_live_state.sh` — `later done in same run must not be pre-acked` 재현 테스트 추가. 전체 스위트 6/6 PASS.
+
 ## [1.3.0] - 2026-06-01
 
 ### Added — Agent liveness (변종 E fix)
