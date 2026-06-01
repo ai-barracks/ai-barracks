@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.3] - 2026-06-01
+
+### Fixed — Portability: in-place sed was a no-op on GNU/Linux
+- **All in-place file edits now route through a portable `_sed_inplace` helper** (`tmp`+`mv`, preserves file mode). The BSD form `sed` + `-i` + empty suffix is a **silent no-op on GNU/Linux** (the empty arg is consumed as the script and the real expression is treated as a filename), so on Linux these edits silently did nothing. Converted sites: `inject_protocol` (protocol marker rewrite), `cmd_hook_end` / `cmd_start` (session `Status`/`Ended` flips — on Linux `completed` was never written), `cmd_wiki_lint` (`[STALE?]` marker), `sync_version_stamp` (`aib_version`). `_mark_interrupted` (v1.3.2) now delegates to the same helper.
+- Recommended by the v1.3.2 council review (C2); this PR got its own adversarial council pass (Claude + Codex → SHIP, no blockers).
+
+### Tests
+- `tests/test_portable_sed.sh` — `_sed_inplace` unit tests (single/multi expr, alt delimiter, missing-file no-op, mode preservation, content stability) + a **regression guard** asserting no BSD-only in-place form remains in `bin/aib` (the only portability proof without a Linux CI runner). Test files now `source bin/aib` before `cd` so they pass under relative-path invocation. Full suite (8 files) green.
+
 ## [1.3.2] - 2026-06-01
 
 ### Added — Orphan/stuck-session reaper (변종 B + 변종 G)
