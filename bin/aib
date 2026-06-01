@@ -286,11 +286,7 @@ cleanup_stale() {
 
         if [ "$verdict" = reap ]; then
             stale_ids="${stale_ids} ${sid}"
-            # Mark session file as interrupted
-            if [ -f "sessions/${sid}.md" ]; then
-                sed -i '' 's/^- \*\*Status\*\*: active/- **Status**: interrupted/' "sessions/${sid}.md" 2>/dev/null || true
-                sed -i '' "s/^- \*\*Ended\*\*: (active)/- **Ended**: $(date '+%Y-%m-%d %H:%M') (stale)/" "sessions/${sid}.md" 2>/dev/null || true
-            fi
+            _mark_interrupted "$sid"   # flip Status: active -> interrupted (idempotent)
         fi
     done
 
@@ -305,7 +301,74 @@ cleanup_stale() {
         mv "$tmp" "SESSIONS.md"
         log_info "Cleaned stale (dead/timed-out) sessions:${stale_ids}"
     fi
+
+    # 변종 B/G: reap orphaned liveness sidecars + stuck-active session files,
+    # beyond the SESSIONS.md rows handled above. Best-effort; never aborts hook_start.
+    reap_orphan_sessions || true
     return 0
+}
+
+# Mark a stuck-active session file as interrupted (idempotent; no-op unless Status: active).
+_mark_interrupted() {
+    local sid="$1" md="sessions/${sid}.md"
+    [ -f "$md" ] || return 0
+    sed -i '' 's/^- \*\*Status\*\*: active/- **Status**: interrupted/' "$md" 2>/dev/null || true
+    sed -i '' "s/^- \*\*Ended\*\*: (active)/- **Ended**: $(date '+%Y-%m-%d %H:%M') (stale)/" "$md" 2>/dev/null || true
+}
+
+# Reap orphaned liveness artifacts left by abnormally-ended sessions (변종 B + 변종 G).
+#   Pass A (변종 G): remove .live/<id>.status(+.ack) whose pid is confirmed dead, and
+#                    mark its session .md interrupted if still active.
+#   Pass B (변종 B): mark a stuck-active session .md (no sidecar, older than grace) interrupted.
+# Invariants: never reap a live pid (council FINAL); never touch the current .active session.
+# Best-effort — must never abort hook_start. Usage: reap_orphan_sessions [--dry-run]
+reap_orphan_sessions() {
+    local dry=""
+    if [ "${1:-}" = "--dry-run" ]; then dry=1; fi
+    local active_id grace now f sid md mtime age
+    active_id="$(cat sessions/.active 2>/dev/null || true)"
+    grace="${AIB_REAP_ORPHAN_AGE:-7200}"
+    now="$(date +%s)"
+
+    # Pass A — dead sidecars (works whether or not the session is still in SESSIONS.md)
+    for f in sessions/.live/*.status; do
+        [ -f "$f" ] || continue
+        sid="$(basename "$f" .status)"
+        if [ "$sid" = "$active_id" ]; then continue; fi
+        [ "$(_session_is_alive "$sid")" = "dead" ] || continue
+        if [ -n "$dry" ]; then
+            log_info "[gc] would reap dead sidecar: ${sid}"
+        else
+            rm -f "sessions/.live/${sid}.status" "sessions/.live/${sid}.ack"
+            _mark_interrupted "$sid"
+        fi
+    done
+
+    # Pass B — stuck-active .md with NO sidecar, older than grace (sidecar-bearing
+    # sessions are Pass A's domain; a live session always has an alive sidecar).
+    for md in sessions/*.md; do
+        [ -f "$md" ] || continue
+        sid="$(basename "$md" .md)"
+        if [ "$sid" = "$active_id" ]; then continue; fi
+        grep -q '^- \*\*Status\*\*: active' "$md" 2>/dev/null || continue
+        if [ -f "sessions/.live/${sid}.status" ]; then continue; fi
+        mtime="$(stat -f %m "$md" 2>/dev/null || stat -c %Y "$md" 2>/dev/null || echo "$now")"
+        case "$mtime" in ''|*[!0-9]*) mtime="$now" ;; esac
+        age=$(( now - mtime ))
+        [ "$age" -gt "$grace" ] || continue
+        if [ -n "$dry" ]; then
+            log_info "[gc] would mark stuck-active (no sidecar, ${age}s old): ${sid}"
+        else
+            _mark_interrupted "$sid"
+        fi
+    done
+    return 0
+}
+
+# aib sessions gc [--dry-run] — reap dead liveness sidecars + stuck-active session files.
+cmd_sessions_gc() {
+    reap_orphan_sessions "${1:-}"
+    [ "${1:-}" = "--dry-run" ] || log_ok "Session liveness GC complete"
 }
 
 # ============================================================
@@ -2132,7 +2195,8 @@ case "${1:-}" in
         case "${1:-}" in
             clean) shift; cmd_sessions_clean "$@" ;;
             state) shift; cmd_session_state "$@" ;;
-            *)     log_err "Usage: aib sessions <clean|state> [args]"; exit 1 ;;
+            gc)    shift; cmd_sessions_gc "$@" ;;
+            *)     log_err "Usage: aib sessions <clean|state|gc> [args]"; exit 1 ;;
         esac
         ;;
     wiki)
@@ -2164,6 +2228,7 @@ case "${1:-}" in
         echo "  barracks [list|remove|route|refresh]   Manage registered barracks"
         echo "  status                         Show active sessions and wiki"
         echo "  sessions clean [--dry-run]     Remove empty (no task + no log) sessions"
+        echo "  sessions gc [--dry-run]        Reap dead liveness sidecars + stuck-active session files"
         echo "  wiki lint [--fix]              Check wiki health and freshness"
         echo "  skills list [path]             List skills with name + description"
         echo "  skills doctor [path]           Validate SKILL.md frontmatter"
