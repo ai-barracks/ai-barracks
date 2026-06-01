@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.0] - 2026-06-01
+
+### Added — Agent liveness (변종 E fix)
+- **Process-liveness session cleanup.** `cleanup_stale` no longer marks a live CLI session `interrupted` from the last-update timestamp alone. A per-session sidecar `sessions/.live/<id>.status` (pid + lstart, atomic temp+rename) is reconciled with `kill -0` and an lstart string-compare reuse guard.
+- **Decision matrix**: `alive` → keep (even past 2h) · `dead` → reap immediately · `unknown` → legacy time rule · strict mode (`AIB_CLEANUP_REQUIRE_LIVENESS=1`) → keep no-sidecar rows.
+- **`aib sessions state <id> [--json]`** — fold a session into an effective state (`working`/`working_stale`/`blocked`/`crashed`/`interrupted`/`done`/`idle`), fully headless.
+- **`aib hook event <client> <Event>`** + `configure_hooks` now wires PreToolUse/PostToolUse/Notification/Stop (idempotent) alongside SessionStart/End.
+- Design: `wiki/topics/agent-liveness-design.md` (LLM council consensus).
+
+### Tests
+- `tests/test_live_state.sh` (writer / reconcile / fold matrix / hook event / cleanup decision matrix / **set-e regression** / hardening), `tests/test_live_hooks_wiring.sh`.
+
 ## [1.2.3] - 2026-05-31
 
 ### Changed

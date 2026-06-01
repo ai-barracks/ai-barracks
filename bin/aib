@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-AIB_VERSION="1.2.3"
+AIB_VERSION="1.3.0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 
