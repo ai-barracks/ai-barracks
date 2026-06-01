@@ -16,10 +16,12 @@ AIB_BIN="${SCRIPT_DIR}/../bin/aib"
 fail() { echo "FAIL: $1"; exit 1; }
 pass() { echo "PASS: $1"; }
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
-cd "$TMP"; mkdir -p sessions/.live
 
+# Source BEFORE cd: bin/aib resolves SCRIPT_DIR from $0, which breaks if CWD has moved
+# and the test was invoked by a relative path (robust to `cd tests && bash test_*.sh`).
 AIB_SOURCE_ONLY=1 source "$AIB_BIN"
-set +e   # bin/aib enables `set -e`; tests rely on explicit `|| fail`
+set +e
+cd "$TMP"; mkdir -p sessions/.live   # bin/aib enables `set -e`; tests rely on explicit `|| fail`
 
 selfp=$$
 selfl="$(ps -o lstart= -p "$$" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
