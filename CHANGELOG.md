@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.3.2] - 2026-06-01
+
+### Added — Orphan/stuck-session reaper (변종 B + 변종 G)
+- **`aib sessions gc [--dry-run]`** — reap liveness leftovers from abnormally-ended sessions. Pass A removes `sessions/.live/<id>.status` sidecars whose process is **confirmed dead** (`kill -0` / `lstart` reuse guard) and marks their `.md` `interrupted` (변종 G — sidecars were never GC'd). Pass B marks a stuck-`active` `.md` that has **no sidecar** and is older than grace (변종 B).
+- **`cleanup_stale` now GCs dead sidecars automatically** (Pass A) at SessionStart, beyond the SESSIONS.md rows it already handled. The time-based `.md` sweep (Pass B) is **manual-only** — a missing sidecar is too weak a liveness proxy to mutate `.md` automatically (avoids false-interrupting a live session).
+- Grace configurable via `AIB_REAP_ORPHAN_AGE` (default 7200s; non-numeric → fallback).
+
+### Fixed
+- **`_mark_interrupted` is now portable** (`tmp`+`mv` instead of BSD-only `sed -i ''`, a silent no-op on GNU/Linux). Also de-dups the same flip in `cleanup_stale`. (Pre-existing `sed -i ''` in `cmd_hook_end`/sync/wiki-lint remain a separate Linux-portability follow-up.)
+- `aib sessions gc` reads `.active` pipefail-safely and normalizes CRLF/whitespace; strict arg handling rejects typos.
+
+### Invariants & limitations
+- Never reaps a live PID or the current `.active` session. Known limits (documented): Pass B trusts sidecar **absence** as a liveness signal (manual-only for that reason); `.active` protects only the current session; misattributed-pid sidecars in multi-session barracks stay `alive` and are not reaped (cs-pointer redesign territory).
+
+### Review & tests
+- Adversarial 2-round LLM council review (Claude + Codex) applied before release.
+- `tests/test_live_reaper.sh` — 14 cases (2326 변종 G repro, 2320 변종 B repro, P0 live-protection, auto-path-skips-Pass-B, manual Pass B, CRLF `.active`, strict-arg rejects, grace fallback, portable-flip no-leftover, set -e with work). Full suite green.
+
 ## [1.3.1] - 2026-06-01
 
 ### Fixed — Liveness ack staleness (aib-cc v1.4.0 parity)
