@@ -17,7 +17,9 @@
 set -euo pipefail
 
 AIB_VERSION="1.3.3"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Use BASH_SOURCE[0] so `source bin/aib` works from any cwd
+# (AIB_SOURCE_ONLY=1 source "$AIB_BIN" is used by tests after `cd`).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 
 # --- Colors (stderr only for hooks — stdout is for LLM context) ---
@@ -86,7 +88,27 @@ client_name() {
 }
 
 make_session_id() {
-    echo "${1}-$(date +%Y%m%d-%H%M)"
+    # client-YYYYMMDD-HHMMSS-<8 hex entropy>
+    # Seconds + entropy suffix prevents collisions when the same client
+    # spawns multiple sessions within the same minute (AIB-001).
+    local client="$1"
+    local ts
+    ts="$(date +%Y%m%d-%H%M%S)"
+    # Each entropy source is guarded with `|| true` so a failing uuidgen/od
+    # (or pipefail-tripping pipeline) does not abort the function under
+    # `set -euo pipefail`; we always fall through to the RANDOM fallback.
+    local entropy=""
+    if command -v uuidgen >/dev/null 2>&1; then
+        entropy="$(uuidgen 2>/dev/null | tr -d -- '-' | tr '[:upper:]' '[:lower:]' | cut -c1-8 || true)"
+    fi
+    if [ -z "$entropy" ] && [ -r /dev/urandom ] && command -v od >/dev/null 2>&1; then
+        entropy="$(od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || true)"
+    fi
+    if [ -z "$entropy" ]; then
+        # Final fallback: pid + RANDOM mixed, hex-encoded, 8 chars.
+        entropy="$(printf '%08x' "$(( ($$ * 1103515245 + RANDOM) & 0xffffffff ))")"
+    fi
+    echo "${client}-${ts}-${entropy}"
 }
 
 ensure_sessions_md() {

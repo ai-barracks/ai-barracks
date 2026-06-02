@@ -142,4 +142,92 @@ cs_reset; echo "{ broken json" > sessions/.live/corrupt.status
 [ "$("$AIB_BIN" sessions state corrupt)" = "unknown" ] || fail "corrupt sidecar -> unknown (no crash)"
 pass "hardening: missing-args no-op + corrupt-sidecar -> unknown"
 
+# ----- AIB-005: SCRIPT_DIR/TEMPLATE_DIR must resolve when sourced from any cwd -----
+# We are already inside `cd "$TMP"` and have sourced bin/aib at the top.
+# If SCRIPT_DIR used `$0` it would resolve relative to the test script, then
+# `$SCRIPT_DIR/../templates` would not point at the real templates dir.
+[ -n "${SCRIPT_DIR:-}" ] || fail "SCRIPT_DIR unset after sourcing bin/aib"
+[ -n "${TEMPLATE_DIR:-}" ] || fail "TEMPLATE_DIR unset after sourcing bin/aib"
+[ -d "$TEMPLATE_DIR" ] || fail "TEMPLATE_DIR ($TEMPLATE_DIR) not a directory after source-from-other-cwd"
+[ -f "$TEMPLATE_DIR/session-context.md" ] || fail "TEMPLATE_DIR/session-context.md not found ($TEMPLATE_DIR)"
+pass "AIB-005: source bin/aib resolves TEMPLATE_DIR after cwd change"
+
+# ----- AIB-001: make_session_id is collision-resistant within the same minute -----
+sid1="$(make_session_id claude)"
+sid2="$(make_session_id claude)"
+[ -n "$sid1" ] && [ -n "$sid2" ] || fail "AIB-001: make_session_id returned empty"
+[ "$sid1" != "$sid2" ] || fail "AIB-001: two immediate calls produced identical IDs ($sid1)"
+# Readable client-prefixed format: claude-YYYYMMDD-HHMMSS-<entropy>
+case "$sid1" in
+  claude-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]-*) ;;
+  *) fail "AIB-001: id missing client-YYYYMMDD-HHMMSS-<entropy> prefix: $sid1" ;;
+esac
+# Filename-safe: no slashes, spaces, or shell-special chars
+case "$sid1" in
+  *[!A-Za-z0-9._-]*) fail "AIB-001: id contains non-filename-safe chars: $sid1" ;;
+esac
+# Different clients keep their prefix
+sid_codex="$(make_session_id codex)"
+case "$sid_codex" in
+  codex-*) ;;
+  *) fail "AIB-001: codex prefix lost: $sid_codex" ;;
+esac
+# A burst of IDs must all be unique (no collisions even when called rapidly)
+burst="$(for _ in 1 2 3 4 5 6 7 8; do make_session_id claude; done | sort -u | wc -l | tr -d ' ')"
+[ "$burst" = "8" ] || fail "AIB-001: burst of 8 ids collapsed to $burst unique values"
+pass "AIB-001: make_session_id collision-resistant + readable + filename-safe"
+
+# ----- AIB-001: entropy-source failures fall back cleanly under `set -euo pipefail` -----
+# Run in a clean sub-bash so stubs do not leak into the rest of the test file.
+sid_uuid_fail="$(bash -c '
+  AIB_SOURCE_ONLY=1 source "'"$AIB_BIN"'"
+  set -euo pipefail
+  uuidgen() { return 1; }
+  make_session_id claude
+')" || fail "AIB-001: failing uuidgen aborted make_session_id under set -euo pipefail"
+case "$sid_uuid_fail" in
+  claude-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]-????????) ;;
+  *) fail "AIB-001: uuidgen-fallback id malformed: $sid_uuid_fail" ;;
+esac
+sid_both_fail="$(bash -c '
+  AIB_SOURCE_ONLY=1 source "'"$AIB_BIN"'"
+  set -euo pipefail
+  uuidgen() { return 1; }
+  od() { return 1; }
+  make_session_id claude
+')" || fail "AIB-001: failing uuidgen+od aborted make_session_id under set -euo pipefail"
+case "$sid_both_fail" in
+  claude-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]-????????) ;;
+  *) fail "AIB-001: RANDOM-fallback id malformed: $sid_both_fail" ;;
+esac
+pass "AIB-001: make_session_id falls back when entropy sources fail under set -euo pipefail"
+
+# ----- AIB-001 integration: two hook starts create distinct session files -----
+# Use a fresh barrack dir so we don't perturb the cleanup_stale fixtures above.
+HB="$(mktemp -d)"
+(
+  cd "$HB"
+  cp "$TEMPLATE_DIR/SESSIONS.md" SESSIONS.md
+  mkdir -p sessions
+  AIB_LIVE_PID=$$ "$AIB_BIN" hook start claude >/dev/null
+  s1="$(cat sessions/.active)"
+  AIB_LIVE_PID=$$ "$AIB_BIN" hook start claude >/dev/null
+  s2="$(cat sessions/.active)"
+  [ "$s1" != "$s2" ] || { echo "FAIL: two hook starts produced same session_id ($s1)"; exit 1; }
+  [ -f "sessions/${s1}.md" ] || { echo "FAIL: first session context file missing: sessions/${s1}.md"; exit 1; }
+  [ -f "sessions/${s2}.md" ] || { echo "FAIL: second session context file missing: sessions/${s2}.md"; exit 1; }
+  # Live sidecars must be distinct per session and self-identify with the right session_id.
+  [ -f "sessions/.live/${s1}.status" ] || { echo "FAIL: first live sidecar missing: sessions/.live/${s1}.status"; exit 1; }
+  [ -f "sessions/.live/${s2}.status" ] || { echo "FAIL: second live sidecar missing: sessions/.live/${s2}.status"; exit 1; }
+  [ "$(jq -r .session_id "sessions/.live/${s1}.status")" = "$s1" ] || { echo "FAIL: sidecar session_id mismatch for $s1"; exit 1; }
+  [ "$(jq -r .session_id "sessions/.live/${s2}.status")" = "$s2" ] || { echo "FAIL: sidecar session_id mismatch for $s2"; exit 1; }
+  # SESSIONS.md must have exactly one row per session_id (distinct registry rows).
+  n1="$(grep -c "^| ${s1} " SESSIONS.md)"
+  n2="$(grep -c "^| ${s2} " SESSIONS.md)"
+  [ "$n1" = "1" ] || { echo "FAIL: expected exactly 1 SESSIONS.md row for $s1, got $n1"; exit 1; }
+  [ "$n2" = "1" ] || { echo "FAIL: expected exactly 1 SESSIONS.md row for $s2, got $n2"; exit 1; }
+) || fail "AIB-001 integration: distinct session files per hook start"
+rm -rf "$HB"
+pass "AIB-001 integration: back-to-back hook starts produce distinct session files"
+
 echo "ALL PASS (test_live_state.sh phase 1-6)"
