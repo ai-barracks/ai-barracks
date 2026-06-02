@@ -527,6 +527,80 @@ aib_live_write() {
     fi
 }
 
+# AIB-002: PID -> session mapping (sessions/.live/by-pid/<pid>.json) so concurrent
+# same-client sessions don't trample each other via the single .active marker or
+# the last `${client}-...` row in SESSIONS.md. Anchor PID logic mirrors
+# aib_live_write (_aib_anchor_pid + _aib_lstart, honoring AIB_LIVE_PID/AIB_LIVE_LSTART).
+_aib_write_pid_map() {
+    local sid="${1:-}" client="${2:-claude}"
+    [ -z "$sid" ] && return 0
+    local pid conf lstart map_dir map_file tmp
+    read -r pid conf <<<"$(_aib_anchor_pid "$client")"
+    [ -z "$pid" ] && return 0
+    lstart="$(_aib_lstart "$pid")"
+    map_dir="sessions/.live/by-pid"
+    mkdir -p "$map_dir"
+    map_file="${map_dir}/${pid}.json"
+    tmp="$(mktemp "${map_dir}/.${pid}.XXXXXX")" || return 1
+    jq -n --arg sid "$sid" --arg client "$client" \
+          --arg lstart "$lstart" --argjson pid "$pid" \
+          '{session_id:$sid, client:$client, pid:$pid, lstart:$lstart}' \
+          > "$tmp" 2>/dev/null
+    if jq empty "$tmp" 2>/dev/null; then
+        mv "$tmp" "$map_file"
+    else
+        rm -f "$tmp"; return 1
+    fi
+    return 0
+}
+
+# Resolve the current agent's session_id via the PID mapping. Three-state contract
+# so callers can distinguish "no map at all" (legacy fallback OK) from "map exists
+# but is unusable" (NEVER fall back — a stale/wrong-client map under the same PID
+# would otherwise mis-route the event/end to whatever .active points at).
+#   exit 0 + echo sid : confident hit (map present, client matches, lstart matches)
+#   exit 1            : no map for this PID (caller MAY fall back to .active)
+#   exit 2            : map exists but is corrupt / stale / wrong-client
+#                       (caller MUST NOT fall back; no-op or warn instead)
+_aib_pid_to_session() {
+    local client="${1:-claude}"
+    local pid conf map_file stored_sid stored_client stored_lstart cur_lstart
+    read -r pid conf <<<"$(_aib_anchor_pid "$client")"
+    [ -z "$pid" ] && return 1
+    map_file="sessions/.live/by-pid/${pid}.json"
+    [ -f "$map_file" ] || return 1
+    # Corrupt JSON: refuse to silently fall through to .active.
+    jq empty "$map_file" 2>/dev/null || return 2
+    stored_sid="$(jq -r '.session_id // empty' "$map_file" 2>/dev/null)"
+    [ -z "$stored_sid" ] && return 2
+    stored_client="$(jq -r '.client // empty' "$map_file" 2>/dev/null)"
+    if [ -n "$stored_client" ] && [ "$stored_client" != "$client" ]; then
+        return 2                                              # wrong-client map
+    fi
+    stored_lstart="$(jq -r '.lstart // empty' "$map_file" 2>/dev/null)"
+    cur_lstart="$(_aib_lstart "$pid")"
+    # PID reuse guard: if both lstarts are known and disagree, treat as stale.
+    if [ -n "$stored_lstart" ] && [ -n "$cur_lstart" ] && [ "$stored_lstart" != "$cur_lstart" ]; then
+        return 2
+    fi
+    echo "$stored_sid"
+    return 0
+}
+
+# Remove this PID's mapping, but only if it still points to the given session.
+_aib_clear_pid_map() {
+    local sid="${1:-}" client="${2:-claude}"
+    [ -z "$sid" ] && return 0
+    local pid conf map_file stored_sid
+    read -r pid conf <<<"$(_aib_anchor_pid "$client")"
+    [ -z "$pid" ] && return 0
+    map_file="sessions/.live/by-pid/${pid}.json"
+    [ -f "$map_file" ] || return 0
+    stored_sid="$(jq -r '.session_id // empty' "$map_file" 2>/dev/null)"
+    [ "$stored_sid" = "$sid" ] && rm -f "$map_file"
+    return 0
+}
+
 # Reconcile a session's liveness from its sidecar: echoes alive|dead|unknown.
 #   alive   = kill -0 pid succeeds AND stored lstart == current lstart
 #   dead    = pid gone, OR pid alive but lstart mismatch (PID reuse)
@@ -606,8 +680,22 @@ cmd_session_state() {
 cmd_hook_event() {
     local client="${1:-claude}" event="${2:-}"
     [ -z "$event" ] && return 0
-    [ -f "sessions/.active" ] || return 0          # no active session: silent no-op
-    local sid; sid="$(cat sessions/.active 2>/dev/null)"
+    # AIB-002: resolve by PID first so concurrent same-client sessions can't be
+    # mis-routed via the shared .active marker. Fall back to .active ONLY when
+    # there is no PID mapping at all (older / manual sessions). If a map file
+    # exists but is invalid (stale lstart / wrong-client / corrupt), refuse to
+    # fall back — .active may point at a different live session and we'd leak
+    # this event into it.
+    local sid="" map_status=0
+    sid="$(_aib_pid_to_session "$client")" || map_status=$?
+    if [ "$map_status" -eq 2 ]; then
+        log_warn "[hook event] PID map for current pid is stale/invalid; ignoring '${event}' (no .active fallback)"
+        return 0
+    fi
+    if [ -z "$sid" ]; then
+        [ -f "sessions/.active" ] || return 0      # no active session: silent no-op
+        sid="$(cat sessions/.active 2>/dev/null)"
+    fi
     [ -z "$sid" ] && return 0
     local state reason
     case "$event" in
@@ -1084,7 +1172,10 @@ cmd_hook_start() {
     ensure_sessions_dir
     # Liveness: record THIS session's sidecar BEFORE cleanup_stale scans (ordering invariant).
     ensure_live_gitignore || true
-    aib_live_write "$session_id" "working" "SessionStart" "session_start" || true
+    AIB_LIVE_CLIENT="$client" aib_live_write "$session_id" "working" "SessionStart" "session_start" || true
+    # AIB-002: record the PID -> session mapping so hook event/end can route to the
+    # right session even when same-client sessions run concurrently.
+    _aib_write_pid_map "$session_id" "$client" || true
     cleanup_stale || true   # cleanup/liveness must never abort session start
 
     # Refresh this barrack's metadata in registry (picks up SOUL.md/wiki changes)
@@ -1094,8 +1185,17 @@ cmd_hook_start() {
         register_barrack "$barrack_path" 2>/dev/null
     fi
 
+    # AIB-004: `aib start <client> [task]` hands the wrapper task via AIB_START_TASK
+    # so the hook (which owns the session row) can record it instead of "(pending)".
+    local row_task="(starting)"
+    local ctx_task="(pending)"
+    if [ -n "${AIB_START_TASK:-}" ]; then
+        row_task="${AIB_START_TASK}"
+        ctx_task="${AIB_START_TASK}"
+    fi
+
     # Register in SESSIONS.md
-    echo "| ${session_id} | ${cname} | ${started_short} | ${started_short} | (starting) |" >> "SESSIONS.md"
+    echo "| ${session_id} | ${cname} | ${started_short} | ${started_short} | ${row_task} |" >> "SESSIONS.md"
     log_info "Session registered: ${session_id}"
 
     # Create session context file
@@ -1103,7 +1203,7 @@ cmd_hook_start() {
     sed -e "s|{{SESSION_ID}}|${session_id}|g" \
         -e "s|{{CLIENT_NAME}}|${cname}|g" \
         -e "s|{{STARTED}}|${started}|g" \
-        -e "s|{{TASK}}|(pending)|g" \
+        -e "s|{{TASK}}|${ctx_task}|g" \
         "$TEMPLATE_DIR/session-context.md" > "$ctx_file"
     log_info "Session context: ${ctx_file}"
 
@@ -1237,9 +1337,21 @@ cmd_hook_start() {
 cmd_hook_end() {
     local client="${1:-unknown}"
 
-    # Find this client's active session in SESSIONS.md
-    local session_id
-    session_id=$(grep "^| ${client}-" "SESSIONS.md" 2>/dev/null | tail -1 | awk -F'|' '{print $2}' | tr -d ' ' || true)
+    # AIB-002: resolve by PID first so the right concurrent same-client session
+    # gets completed. Fall back to the last `${client}-...` row in SESSIONS.md
+    # ONLY when no PID mapping is recorded (older / manual sessions). If a map
+    # file exists but is invalid (stale lstart / wrong-client / corrupt) we must
+    # NOT fall back — that would let an unrelated session's row get yanked from
+    # SESSIONS.md (or .active cleared) by an end event we can't trust.
+    local session_id="" map_status=0
+    session_id="$(_aib_pid_to_session "$client")" || map_status=$?
+    if [ "$map_status" -eq 2 ]; then
+        log_warn "[hook end] PID map for current pid is stale/invalid; ignoring end (no SESSIONS.md/.active fallback)"
+        return 0
+    fi
+    if [ -z "$session_id" ]; then
+        session_id=$(grep "^| ${client}-" "SESSIONS.md" 2>/dev/null | tail -1 | awk -F'|' '{print $2}' | tr -d ' ' || true)
+    fi
 
     if [ -z "$session_id" ]; then
         log_warn "No active session found for ${client}"
@@ -1250,7 +1362,15 @@ cmd_hook_end() {
     local tmp="SESSIONS.md.tmp"
     grep -v "^| ${session_id} " "SESSIONS.md" > "$tmp" 2>/dev/null || true
     mv "$tmp" "SESSIONS.md"
-    rm -f "sessions/.active"
+    # Only clear .active if it actually points to the session ending now;
+    # otherwise we'd strip another concurrent session's marker.
+    if [ -f "sessions/.active" ]; then
+        local active_now
+        active_now="$(_active_session_id)"
+        [ "$active_now" = "$session_id" ] && rm -f "sessions/.active"
+    fi
+    # Drop this PID's mapping (no-op if the mapping no longer points here).
+    _aib_clear_pid_map "$session_id" "$client" || true
     log_info "Session unregistered: ${session_id}"
 
     # Liveness: mark sidecar done (final state) before flipping the session file.
@@ -1409,6 +1529,38 @@ cmd_start() {
         exit 1
     fi
 
+    # Build permission-skip flags per client (computed up-front so both branches see them).
+    local skip_flags=""
+    if $skip_permissions; then
+        case "$client" in
+            claude) skip_flags="--dangerously-skip-permissions" ;;
+            gemini) skip_flags="--yolo" ;;
+            codex)  skip_flags="--dangerously-bypass-approvals-and-sandbox" ;;
+            *)      log_warn "Unknown client '$client': --skip-permissions ignored" ;;
+        esac
+        [ -n "$skip_flags" ] && log_warn "Permission skip enabled: $skip_flags"
+    fi
+
+    # v1.2.0: non-blocking drift warning (does not block launch)
+    check_skills_drift "$(pwd)" || true
+
+    # AIB-004: Claude wrapper is HOOK-OWNED.
+    # Claude's SessionStart/SessionEnd hooks now create/finalize the session row,
+    # the context file, the .active marker, and the liveness sidecar. Pre-creating
+    # any of that here would race the hooks and produce duplicate session rows /
+    # stale .active markers when the wrapper exits. The optional `[task]` arg is
+    # handed over via AIB_START_TASK so the hook can use it instead of "(pending)".
+    if [ "$client" = "claude" ]; then
+        validate_claude_settings
+        if [ -n "$task" ]; then
+            export AIB_START_TASK="$task"
+            log_info "Wrapper task -> AIB_START_TASK=\"$task\""
+        fi
+        exec "$client" $skip_flags
+    fi
+
+    # Non-Claude clients (Gemini / Codex): wrapper still owns the session row
+    # because those CLIs don't ship the AIB SessionStart/SessionEnd hooks.
     local cname
     cname=$(client_name "$client")
     local session_id
@@ -1469,32 +1621,11 @@ cmd_start() {
     # Write active session marker
     echo "${session_id}" > "sessions/.active"
 
-    # Build permission-skip flags per client
-    local skip_flags=""
-    if $skip_permissions; then
-        case "$client" in
-            claude) skip_flags="--dangerously-skip-permissions" ;;
-            gemini) skip_flags="--yolo" ;;
-            codex)  skip_flags="--dangerously-bypass-approvals-and-sandbox" ;;
-            *)      log_warn "Unknown client '$client': --skip-permissions ignored" ;;
-        esac
-        [ -n "$skip_flags" ] && log_warn "Permission skip enabled: $skip_flags"
-    fi
-
-    # v1.2.0: non-blocking drift warning (does not block launch)
-    check_skills_drift "$(pwd)" || true
-
     # Launch CLI with script capture (Gemini/Codex)
-    # Claude uses $CLAUDE_TRANSCRIPT_PATH instead (handled in hook end)
-    if [ "$client" = "claude" ]; then
-        validate_claude_settings
-        exec "$client" $skip_flags
+    if [ -n "$skip_flags" ]; then
+        script -q "$raw_file" "$client" $skip_flags
     else
-        if [ -n "$skip_flags" ]; then
-            script -q "$raw_file" "$client" $skip_flags
-        else
-            script -q "$raw_file" "$client"
-        fi
+        script -q "$raw_file" "$client"
     fi
 }
 
