@@ -112,6 +112,39 @@ agent_timeout() {
     esac
 }
 
+# kill_tree: signal a process and all of its descendants.
+# Walks the process tree iteratively (pgrep -P is available on macOS and Linux)
+# so timeout / grace kills do not leave child or grandchild processes behind.
+kill_tree() {
+    local pid="$1"
+    local sig="${2:-TERM}"
+    [[ -z "$pid" ]] && return 0
+    [[ "$pid" -le 1 ]] && return 0
+
+    local -a all=("$pid")
+    local -a queue=("$pid")
+    while [[ ${#queue[@]} -gt 0 ]]; do
+        local current="${queue[0]}"
+        queue=("${queue[@]:1}")
+        local children
+        children=$(pgrep -P "$current" 2>/dev/null || true)
+        if [[ -z "$children" ]]; then
+            continue
+        fi
+        local child
+        for child in $children; do
+            all+=("$child")
+            queue+=("$child")
+        done
+    done
+
+    # Signal leaves first, then their parents.
+    local i
+    for ((i=${#all[@]}-1; i>=0; i--)); do
+        kill -"$sig" "${all[i]}" 2>/dev/null || true
+    done
+}
+
 start_watchdog() {
     local target_pid="$1"
     local tout="$2"
@@ -124,7 +157,9 @@ start_watchdog() {
         sleep_pid=$!
         wait "$sleep_pid" 2>/dev/null || exit 0
         touch "$killed_marker"
-        kill "$target_pid" 2>/dev/null
+        kill_tree "$target_pid" TERM
+        sleep 1
+        kill_tree "$target_pid" KILL
     ) >/dev/null 2>&1 &
     WATCHDOG_PID=$!
 }
@@ -520,7 +555,11 @@ call_claude() {
     local killed_marker="${outfile}.killed"
     rm -f "$killed_marker"
 
-    claude -p "$prompt" --model "$CLAUDE_MODEL" --effort "$CLAUDE_EFFORT" --output-format text --no-session-persistence --permission-mode bypassPermissions > "$outfile" 2>"$stderr_file" &
+    # Run claude from a neutral cwd (/tmp) with --setting-sources project,local
+    # so the caller barrack's user-level hooks/settings do not run for council
+    # turns (e.g. SessionStart/SessionEnd hooks that mutate sessions/.active).
+    # exec replaces the subshell so $cmd_pid is the actual claude PID.
+    ( cd /tmp && exec claude -p "$prompt" --model "$CLAUDE_MODEL" --effort "$CLAUDE_EFFORT" --output-format text --no-session-persistence --permission-mode bypassPermissions --setting-sources project,local ) > "$outfile" 2>"$stderr_file" < /dev/null &
     local cmd_pid=$!
     start_watchdog "$cmd_pid" "$tout" "$killed_marker"
     local watchdog_pid=$WATCHDOG_PID
@@ -562,7 +601,7 @@ call_gemini() {
 
     # JSON 출력으로 받아서 본문/토큰 분리
     local raw_json="${outfile}.raw.json"
-    gemini -p "$prompt" -m "$GEMINI_MODEL" -o json --yolo > "$raw_json" 2>"$stderr_file" &
+    gemini -p "$prompt" -m "$GEMINI_MODEL" -o json --yolo > "$raw_json" 2>"$stderr_file" < /dev/null &
     local cmd_pid=$!
     start_watchdog "$cmd_pid" "$tout" "$killed_marker"
     local watchdog_pid=$WATCHDOG_PID
@@ -612,7 +651,7 @@ call_codex() {
     local session_before
     session_before=$(ls -t ~/.codex/sessions/2026/*/*/rollout-*.jsonl 2>/dev/null | head -1) || true
 
-    codex exec --model "$CODEX_MODEL" -c "model_reasoning_effort=\"${CODEX_EFFORT}\"" --dangerously-bypass-approvals-and-sandbox -C /tmp --skip-git-repo-check --ephemeral "$prompt" > "$outfile" 2>"$stderr_file" &
+    codex exec --model "$CODEX_MODEL" -c "model_reasoning_effort=\"${CODEX_EFFORT}\"" --dangerously-bypass-approvals-and-sandbox -C /tmp --skip-git-repo-check --ephemeral "$prompt" > "$outfile" 2>"$stderr_file" < /dev/null &
     local cmd_pid=$!
     start_watchdog "$cmd_pid" "$tout" "$killed_marker"
     local watchdog_pid=$WATCHDOG_PID
@@ -665,10 +704,11 @@ call_agent_with_retry() {
     local agent="$1"
     local prompt="$2"
     local outfile="$3"
-    local max_retries=4
+    # Test harnesses override these to skip the long retry chain.
+    local max_retries="${AIB_COUNCIL_MAX_RETRIES:-4}"
+    local base_delay="${AIB_COUNCIL_RETRY_DELAY:-30}"
     local attempt=0
     local call_fn="call_${agent}"
-    local base_delay=30  # 30초 기본 대기
 
     while [[ $attempt -le $max_retries ]]; do
         if [[ $attempt -gt 0 ]]; then
@@ -682,7 +722,9 @@ call_agent_with_retry() {
         if $call_fn "$prompt" "$outfile" && validate_response "$outfile"; then
             return 0
         fi
-        ((attempt++))
+        # 일반 증분식이면 attempt=0 일 때 ((expr)) 의 종료 코드가 1이 되어
+        # set -e 가 함수 자체를 중단시킨다. 산술 대입으로 회피한다.
+        attempt=$(( attempt + 1 ))
     done
 
     log_error "  ${agent} 최종 실패 (재시도 ${max_retries}회 소진)"
@@ -1012,16 +1054,19 @@ run_parallel_round() {
 
         [[ $alive -eq 0 ]] && break
 
-        # 유예 시간 초과 — 남은 에이전트 강제 종료
+        # 유예 시간 초과 — 남은 에이전트 강제 종료 (자식/손자까지 전부 회수)
         if $first_done && [[ $SECONDS -ge $grace_deadline ]]; then
             for i in "${!pids[@]}"; do
                 [[ "${pid_status[$i]}" != "running" ]] && continue
                 log_warn "  ${agents[$i]} 유예 시간 초과 (${GRACE_PERIOD}s) — 강제 종료"
-                kill "${pids[$i]}" 2>/dev/null || true
-                pkill -P "${pids[$i]}" 2>/dev/null || true
+                kill_tree "${pids[$i]}" TERM
                 pid_status[$i]="killed"
             done
-            sleep 2
+            sleep 1
+            for i in "${!pids[@]}"; do
+                [[ "${pid_status[$i]}" == "killed" ]] && kill_tree "${pids[$i]}" KILL
+            done
+            sleep 1
             break
         fi
 
@@ -1067,9 +1112,18 @@ run_parallel_round() {
     log_info "  결과: ${success} 성공, ${fail} 실패"
     print_token_summary "$round"
 
+    # debate/adversarial 모드는 멀티 에이전트 합의가 본질이므로
+    # 유효 응답이 2개 미만이면 단일 에이전트 자가 검토가 다중 합의로
+    # 위장되지 않도록 합성 전에 중단한다. (pipeline 모드는 이 함수를
+    # 거치지 않고 직접 call_agent_with_retry 를 호출한다.)
     if [[ $success -lt 1 ]]; then
         log_error "모든 에이전트가 실패했습니다."
         finalize_manifest "all_agents_failed"
+        exit 2
+    fi
+    if [[ $success -lt 2 ]]; then
+        log_error "유효한 에이전트 응답이 부족합니다 (성공 ${success}/최소 2) — 다중 합의 불가, 합성을 진행하지 않습니다."
+        finalize_manifest "insufficient_valid_agents"
         exit 2
     fi
 
@@ -1121,14 +1175,14 @@ run_debate_mode() {
 
     # Round 2~N: 교차 리뷰
     for ((r = (start_round > 2 ? start_round : 2); r <= ROUNDS; r++)); do
-        # 활성 에이전트 수 재확인 (disabled 제외)
+        # 활성 에이전트 수 재확인 (disabled 제외) — debate 는 최소 2명 필요
         local active_now=0
         $USE_CLAUDE && [[ ! " ${DISABLED_AGENTS[*]:-} " =~ " claude " ]] && ((active_now++)) || true
         $USE_GEMINI && [[ ! " ${DISABLED_AGENTS[*]:-} " =~ " gemini " ]] && ((active_now++)) || true
         $USE_CODEX  && [[ ! " ${DISABLED_AGENTS[*]:-} " =~ " codex " ]]  && ((active_now++)) || true
-        if [[ $active_now -lt 1 ]]; then
-            log_error "활성 에이전트가 없습니다 — 토론 종료"
-            finalize_manifest "no_active_agents"
+        if [[ $active_now -lt 2 ]]; then
+            log_error "활성 에이전트가 부족합니다 (활성 ${active_now}/최소 2) — 다중 합의 불가, 토론 종료"
+            finalize_manifest "insufficient_valid_agents"
             exit 3
         fi
 
@@ -1168,15 +1222,15 @@ run_adversarial_mode() {
 
     # Round 2~N: 반대론자 순환
     for ((r = (start_round > 2 ? start_round : 2); r <= ROUNDS; r++)); do
-        # 활성 에이전트 수 재확인 (disabled 제외)
+        # 활성 에이전트 수 재확인 (disabled 제외) — adversarial 도 최소 2명 필요
         local active_now=0
         local active_agents=()
         $USE_CLAUDE && [[ ! " ${DISABLED_AGENTS[*]:-} " =~ " claude " ]] && ((active_now++)) && active_agents+=("claude") || true
         $USE_GEMINI && [[ ! " ${DISABLED_AGENTS[*]:-} " =~ " gemini " ]] && ((active_now++)) && active_agents+=("gemini") || true
         $USE_CODEX  && [[ ! " ${DISABLED_AGENTS[*]:-} " =~ " codex " ]]  && ((active_now++)) && active_agents+=("codex")  || true
-        if [[ $active_now -lt 1 ]]; then
-            log_error "활성 에이전트가 없습니다 — 토론 종료"
-            finalize_manifest "no_active_agents"
+        if [[ $active_now -lt 2 ]]; then
+            log_error "활성 에이전트가 부족합니다 (활성 ${active_now}/최소 2) — 다중 합의 불가, 토론 종료"
+            finalize_manifest "insufficient_valid_agents"
             exit 3
         fi
 
