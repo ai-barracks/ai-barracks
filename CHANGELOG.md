@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.4] - 2026-06-02
+
+### Fixed
+- **Session IDs are now collision-safe**: `aib` no longer relies on second-resolution timestamps alone and now uses collision-resistant `mktemp`/PID/time/random fallback generation.
+- **Hooks are routed by agent PID**: SessionStart/End and live hook events resolve the caller process to the correct session instead of falling back to a global `.active` file in multi-agent barracks.
+- **Council orchestration is fail-closed**: unsupported agent specs are rejected up front, council child runs avoid current-barrack hook pollution, and missing/partial round outputs no longer produce false-success synthesis.
+
+### Changed
+- Source formula metadata was re-aligned with the current published Homebrew tap formula before preparing this patch release.
+
+### Verification
+- Shell syntax check and full `tests/*.sh` regression suite PASS.
+
 ## [1.3.3] - 2026-06-01
 
 ### Fixed — Portability: in-place sed was a no-op on GNU/Linux
