@@ -79,7 +79,8 @@ backward compat: `skills: [council]` 리스트 형식도 그대로 유효(`disco
 `aib sync`가 두 가지 wiring을 materialize합니다:
 
 - **W1 (Claude Code, native)**: `skills/<n>/` → `.claude/skills/<n>/` 상대 symlink 자동 생성. Claude Code의 project-local skill discovery가 이를 인식해 native `Skill` 도구로 호출 가능. 런타임 산물이므로 `.gitignore`에 포함.
-- **W2 (Gemini/Codex, 텍스트 카탈로그)**: `CLAUDE.md` = `GEMINI.md` = `AGENTS.md`의 `<!-- AIB:SKILLS:START -->` 블록에 카탈로그 자동 주입. agent가 SKILL.md를 *문서로* 읽고 본문 명시 명령을 직접 실행.
+- **Codex native**: `skills/<n>/` → `.agents/skills/<n>/` 상대 symlink. Claude/Codex native 사용자 파일과 다른 symlink는 보존하며 이름 충돌 시 sync를 중단한다. 삭제된 skill의 AIB-owned link만 제거한다.
+- **W2 (모든 client, 텍스트 카탈로그)**: `CLAUDE.md` = `GEMINI.md` = `AGENTS.md`의 `<!-- AIB:SKILLS:START -->` 블록에 카탈로그 자동 주입. native discovery가 없는 client는 SKILL.md를 문서로 읽고 본문 명시 명령을 직접 실행.
 
 ### Drift 보호
 
@@ -91,7 +92,7 @@ backward compat: `skills: [council]` 리스트 형식도 그대로 유효(`disco
 
 1. `skills/<slug>/SKILL.md` 추가/수정
 2. `aib sync` (W1 + W2 갱신)
-3. 새 세션 시작 — Claude Code는 native, Gemini/Codex는 .md 카탈로그로 인식
+3. 새 세션 시작 — Claude Code/Codex는 native, Gemini는 .md 카탈로그로 인식
 
 ## 관리 명령
 
@@ -102,7 +103,7 @@ backward compat: `skills: [council]` 리스트 형식도 그대로 유효(`disco
 
 - skills/ 자동 생성 금지 (사용자 승격만 허용)
 - SKILL.md 직접 수정은 사용자 또는 명시적 사용자 지시 하에서만
-- `allowed-tools` 명시 없는 스킬은 광범위 도구 호출 못함 (클라이언트 제약 의존)
+- `allowed-tools`는 Claude Code의 사전 승인 grant이며 접근 제한 sandbox가 아니다. 실제 권한은 각 client의 permission/sandbox 정책으로 제한한다.
 
 ## 참고
 

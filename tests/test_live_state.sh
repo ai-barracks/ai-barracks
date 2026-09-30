@@ -82,7 +82,11 @@ pass "cmd_session_state fold matrix"
 echo "claude-20260601-1430" > sessions/.active
 AIB_LIVE_PID=$$ "$AIB_BIN" hook event claude PreToolUse
 [ "$("$AIB_BIN" sessions state claude-20260601-1430)" = "working" ] || fail "PreToolUse -> working"
-AIB_LIVE_PID=$$ "$AIB_BIN" hook event claude Notification
+printf '%s' '{"notification_type":"idle_prompt"}' | AIB_LIVE_PID=$$ "$AIB_BIN" hook event claude Notification
+[ "$("$AIB_BIN" sessions state claude-20260601-1430)" = "working" ] || fail "idle notification must not block"
+printf '%s' 'not-json' | AIB_LIVE_PID=$$ "$AIB_BIN" hook event claude Notification
+[ "$("$AIB_BIN" sessions state claude-20260601-1430)" = "working" ] || fail "malformed notification must not block"
+printf '%s' '{"notification_type":"permission_prompt"}' | AIB_LIVE_PID=$$ "$AIB_BIN" hook event claude Notification
 [ "$("$AIB_BIN" sessions state claude-20260601-1430)" = "blocked" ] || fail "Notification -> blocked"
 AIB_LIVE_PID=$$ "$AIB_BIN" hook event claude Stop
 [ "$("$AIB_BIN" sessions state claude-20260601-1430)" = "done" ] || fail "Stop -> done"

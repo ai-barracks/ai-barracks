@@ -32,6 +32,7 @@
 #   -h, --help              도움말
 
 set -euo pipefail
+umask 077 # Council prompts/responses/usage are private local artifacts.
 
 # ── 기본값 ──────────────────────────────────────────────
 ROUNDS=2
@@ -65,11 +66,11 @@ else
 fi
 
 # 모델 설정
-CLAUDE_MODEL="${AIB_COUNCIL_CLAUDE_MODEL:-claude-opus-4-8}"
-CLAUDE_EFFORT="${AIB_COUNCIL_CLAUDE_EFFORT:-high}"
+CLAUDE_MODEL="${AIB_COUNCIL_CLAUDE_MODEL:-runtime-default}"
+CLAUDE_EFFORT="${AIB_COUNCIL_CLAUDE_EFFORT:-runtime-default}"
 GEMINI_MODEL="${AIB_COUNCIL_GEMINI_MODEL:-gemini-3.1-pro-preview}"
-CODEX_MODEL="${AIB_COUNCIL_CODEX_MODEL:-gpt-5.5}"
-CODEX_EFFORT="${AIB_COUNCIL_CODEX_EFFORT:-medium}"
+CODEX_MODEL="${AIB_COUNCIL_CODEX_MODEL:-runtime-default}"
+CODEX_EFFORT="${AIB_COUNCIL_CODEX_EFFORT:-runtime-default}"
 
 # 색상 — stdout이 TTY가 아니면 비활성화 (Slack 등 파이프 환경)
 if [[ -t 1 ]]; then
@@ -92,15 +93,15 @@ log_ok()    { echo -e "${GREEN}[Council]${NC} $*" >&2; }
 log_warn()  { echo -e "${YELLOW}[Council]${NC} $*" >&2; }
 log_error() { echo -e "${RED}[Council]${NC} $*" >&2; }
 
-label_claude() { echo -e "${PURPLE}[Claude/Opus-4.8/${CLAUDE_EFFORT}]${NC}"; }
-label_gemini() { echo -e "${CYAN}[Gemini/3.1-Pro-Preview]${NC}"; }
-label_codex()  { echo -e "${GREEN}[Codex/GPT-5.5/${CODEX_EFFORT}]${NC}"; }
+label_claude() { echo -e "${PURPLE}[Claude/${CLAUDE_MODEL}/${CLAUDE_EFFORT}]${NC}"; }
+label_gemini() { echo -e "${CYAN}[Gemini/${GEMINI_MODEL}]${NC}"; }
+label_codex()  { echo -e "${GREEN}[Codex/${CODEX_MODEL}/${CODEX_EFFORT}]${NC}"; }
 
 agent_label() {
     case "$1" in
-        claude) echo "Claude/Opus-4.8/${CLAUDE_EFFORT}" ;;
-        gemini) echo "Gemini/3.1-Pro-Preview" ;;
-        codex)  echo "Codex/GPT-5.5/${CODEX_EFFORT}" ;;
+        claude) echo "Claude/${CLAUDE_MODEL}/${CLAUDE_EFFORT}" ;;
+        gemini) echo "Gemini/${GEMINI_MODEL}" ;;
+        codex)  echo "Codex/${CODEX_MODEL}/${CODEX_EFFORT}" ;;
     esac
 }
 
@@ -166,35 +167,8 @@ start_watchdog() {
 
 # ── 토큰 & 한도 모니터링 ─────────────────────────────
 
-get_claude_quota() {
-    # statusline.sh와 동일한 방식: macOS keychain에서 OAuth 토큰 추출
-    local token
-    token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null \
-        | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null) || true
-    [[ -z "$token" ]] && return 1
-
-    local resp
-    resp=$(curl -s --max-time 5 "https://api.anthropic.com/api/oauth/usage" \
-        -H "Authorization: Bearer $token" \
-        -H "anthropic-beta: oauth-2025-04-20" \
-        -H "Accept: application/json" 2>/dev/null) || true
-    [[ -z "$resp" ]] && return 1
-
-    local h5 d7
-    h5=$(echo "$resp" | jq -r '.five_hour.utilization // empty' 2>/dev/null)
-    d7=$(echo "$resp" | jq -r '.seven_day.utilization // empty' 2>/dev/null)
-
-    if [[ -n "$h5" ]]; then
-        echo "5h: ${h5%.*}%, 7d: ${d7%.*}%"
-        # JSON으로도 저장 (리포트용)
-        echo "$resp" | jq '{
-            five_hour_pct: (.five_hour.utilization | floor),
-            seven_day_pct: (.seven_day.utilization | floor)
-        }' > "${SESSION_DIR}/claude_quota.json" 2>/dev/null || true
-    else
-        return 1
-    fi
-}
+# No credential scraping or undocumented quota endpoint. Use the provider UI.
+get_claude_quota() { return 1; }
 
 extract_gemini_tokens() {
     local raw_json="$1"
@@ -210,18 +184,9 @@ extract_gemini_tokens() {
     }' "$raw_json" > "$token_file" 2>/dev/null || echo '{}' > "$token_file"
 }
 
+# Ephemeral calls have no persisted rollout. Never borrow another session's usage.
 extract_codex_tokens() {
-    local session_before="$1"
-    local token_file="$2"
-
-    local session_after
-    session_after=$(ls -t ~/.codex/sessions/2026/*/*/rollout-*.jsonl 2>/dev/null | head -1) || true
-
-    if [[ -n "$session_after" && "$session_before" != "$session_after" && -f "$session_after" ]]; then
-        grep '"token_count"' "$session_after" 2>/dev/null | tail -1 | \
-            jq '.payload.info.total_token_usage // {}' > "$token_file" 2>/dev/null || echo '{}' > "$token_file"
-    fi
-    [[ ! -s "$token_file" ]] && echo '{}' > "$token_file"
+    printf '%s\n' '{"available":false,"reason":"structured usage not captured"}' > "$2"
 }
 
 print_token_summary() {
@@ -229,7 +194,7 @@ print_token_summary() {
     local has_tokens=false
 
     # Gemini / Codex: 라운드 사용량
-    for agent in gemini codex; do
+    for agent in claude gemini codex; do
         local token_file="${SESSION_DIR}/r${round}_${agent}.md.tokens.json"
         [[ ! -s "$token_file" ]] && continue
         local total
@@ -269,7 +234,7 @@ LLM Council v2 - 멀티라운드 디베이트 시스템
 모드:
   debate (기본)    자유 토론 + 교차 리뷰 (창의적 발상 + 체계적 검토)
   adversarial      매 라운드 1명이 반대론자(Devil's Advocate) 역할
-  pipeline         역할 고정 순차 실행 (Claude 계획/구현 → Codex 리뷰, --gemini 시 Gemini 계획)
+  pipeline         역할 고정 순차 실행 (Claude 설계안 작성 → Codex 리뷰, --gemini 시 Gemini 계획)
 
 옵션:
   -r, --rounds N          토론 라운드 수 (기본: 2)
@@ -362,7 +327,9 @@ fi
 
 resume_session() {
     local sid="$1"
+    [[ "$sid" =~ ^[0-9]{8}_[0-9]{6}_[0-9]+$ ]] || { log_error "Invalid Council session ID"; exit 4; }
     SESSION_DIR="/tmp/council/${sid}"
+    [[ ! -L /tmp/council && ! -L "$SESSION_DIR" && -O "$SESSION_DIR" ]] || { log_error "Unsafe Council session directory"; exit 4; }
     SESSION_ID="$sid"
 
     if [[ ! -f "${SESSION_DIR}/manifest.json" ]]; then
@@ -422,7 +389,9 @@ fi
 if [[ -z "$RESUME_SESSION" ]]; then
     SESSION_ID=$(date +%Y%m%d_%H%M%S)_$$
     SESSION_DIR="/tmp/council/${SESSION_ID}"
-    mkdir -p "$SESSION_DIR"
+    [[ ! -L /tmp/council ]] || { log_error "Refusing symlinked Council root"; exit 4; }
+    mkdir -p /tmp/council
+    mkdir "$SESSION_DIR" # fail closed on pre-existing/predictable path collision
 fi
 log_info "세션: ${SESSION_DIR}"
 
@@ -486,7 +455,7 @@ update_manifest_round() {
     if [[ -s "$token_file" ]]; then
         local check
         check=$(jq -r '.total // .total_tokens // 0' "$token_file" 2>/dev/null) || true
-        if [[ -n "$check" && "$check" != "0" && "$check" != "null" ]]; then
+        if jq -e '.available == false' "$token_file" >/dev/null 2>&1 || [[ -n "$check" && "$check" != "0" && "$check" != "null" ]]; then
             token_json=$(cat "$token_file")
         fi
     fi
@@ -545,6 +514,16 @@ finalize_manifest() {
 
 # ── CLI 호출 함수 ──────────────────────────────────────
 
+parse_provider_result() {
+    local provider="$1" raw="$2" outfile="$3" parsed="${3}.parsed.json"
+    if ! jq -es --arg provider "$provider" -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/council-result.jq" "$raw" > "$parsed" 2>/dev/null; then
+        rm -f "$parsed"; return 1
+    fi
+    jq -r '.text' "$parsed" > "$outfile"
+    jq '.tokens' "$parsed" > "${outfile}.tokens.json"
+    rm -f "$parsed"
+}
+
 call_claude() {
     local prompt="$1"
     local outfile="$2"
@@ -553,13 +532,17 @@ call_claude() {
     local start_time=$SECONDS
     local stderr_file="${outfile}.stderr"
     local killed_marker="${outfile}.killed"
-    rm -f "$killed_marker"
+    local raw_json="${outfile}.raw.json"
+    rm -f "$killed_marker" "$outfile" "${outfile}.tokens.json"
 
     # Run claude from a neutral cwd (/tmp) with --setting-sources project,local
     # so the caller barrack's user-level hooks/settings do not run for council
     # turns (e.g. SessionStart/SessionEnd hooks that mutate sessions/.active).
     # exec replaces the subshell so $cmd_pid is the actual claude PID.
-    ( cd /tmp && exec claude -p "$prompt" --model "$CLAUDE_MODEL" --effort "$CLAUDE_EFFORT" --output-format text --no-session-persistence --permission-mode bypassPermissions --setting-sources project,local ) > "$outfile" 2>"$stderr_file" < /dev/null &
+    local model_args=()
+    [[ "$CLAUDE_MODEL" == runtime-default ]] || model_args+=(--model "$CLAUDE_MODEL")
+    [[ "$CLAUDE_EFFORT" == runtime-default ]] || model_args+=(--effort "$CLAUDE_EFFORT")
+    ( cd /tmp && exec claude -p "$prompt" ${model_args[@]+"${model_args[@]}"} --output-format json --no-session-persistence --permission-mode dontAsk --tools "" --disallowedTools "mcp__*" --strict-mcp-config --mcp-config '{"mcpServers":{}}' --settings '{"disableAllHooks":true}' --setting-sources project,local ) > "$raw_json" 2>"$stderr_file" < /dev/null &
     local cmd_pid=$!
     start_watchdog "$cmd_pid" "$tout" "$killed_marker"
     local watchdog_pid=$WATCHDOG_PID
@@ -571,7 +554,7 @@ call_claude() {
     local duration=$(( SECONDS - start_time ))
     echo "$duration" > "${outfile}.meta"
 
-    if [[ -s "$outfile" ]]; then
+    if [[ "$exit_code" -eq 0 && ! -f "$killed_marker" && -s "$raw_json" ]] && parse_provider_result claude "$raw_json" "$outfile"; then
         rm -f "$stderr_file" "$killed_marker"
         return 0
     else
@@ -583,6 +566,7 @@ call_claude() {
         else
             error_detail="exit=${exit_code}, ${duration}s"
         fi
+        [[ ! -s "$raw_json" ]] || cp "$raw_json" "${outfile}.partial"
         echo "[오류: Claude 호출 실패 (${error_detail})]" > "$outfile"
         rm -f "$killed_marker"
         return 1
@@ -601,7 +585,7 @@ call_gemini() {
 
     # JSON 출력으로 받아서 본문/토큰 분리
     local raw_json="${outfile}.raw.json"
-    gemini -p "$prompt" -m "$GEMINI_MODEL" -o json --yolo > "$raw_json" 2>"$stderr_file" < /dev/null &
+    gemini -p "$prompt" -m "$GEMINI_MODEL" -o json > "$raw_json" 2>"$stderr_file" < /dev/null &
     local cmd_pid=$!
     start_watchdog "$cmd_pid" "$tout" "$killed_marker"
     local watchdog_pid=$WATCHDOG_PID
@@ -613,7 +597,7 @@ call_gemini() {
     local duration=$(( SECONDS - start_time ))
     echo "$duration" > "${outfile}.meta"
 
-    if [[ -s "$raw_json" ]]; then
+    if [[ "$exit_code" -eq 0 && ! -f "$killed_marker" && -s "$raw_json" ]]; then
         # 본문 추출 (JSON → 텍스트)
         jq -r '.response // .candidates[0].content // .' "$raw_json" > "$outfile" 2>/dev/null \
             || cp "$raw_json" "$outfile"
@@ -645,13 +629,13 @@ call_codex() {
     local start_time=$SECONDS
     local stderr_file="${outfile}.stderr"
     local killed_marker="${outfile}.killed"
-    rm -f "$killed_marker"
+    local raw_json="${outfile}.raw.json"
+    rm -f "$killed_marker" "$outfile" "${outfile}.tokens.json"
 
-    # 실행 전 최신 세션 파일 기록 (토큰 추출용)
-    local session_before
-    session_before=$(ls -t ~/.codex/sessions/2026/*/*/rollout-*.jsonl 2>/dev/null | head -1) || true
-
-    codex exec --model "$CODEX_MODEL" -c "model_reasoning_effort=\"${CODEX_EFFORT}\"" --dangerously-bypass-approvals-and-sandbox -C /tmp --skip-git-repo-check --ephemeral "$prompt" > "$outfile" 2>"$stderr_file" < /dev/null &
+    local session_before="" model_args=()
+    [[ "$CODEX_MODEL" == runtime-default ]] || model_args+=(--model "$CODEX_MODEL")
+    [[ "$CODEX_EFFORT" == runtime-default ]] || model_args+=(-c "model_reasoning_effort=\"${CODEX_EFFORT}\"")
+    codex exec --json ${model_args[@]+"${model_args[@]}"} --ignore-user-config --ignore-rules --disable hooks --disable plugins --disable apps --disable shell_tool --disable unified_exec --disable multi_agent --disable browser_use --disable computer_use --disable image_generation --disable skill_mcp_dependency_install --disable memories -c 'web_search="disabled"' --sandbox read-only -c 'approval_policy="never"' -C /tmp --skip-git-repo-check --ephemeral "$prompt" > "$raw_json" 2>"$stderr_file" < /dev/null &
     local cmd_pid=$!
     start_watchdog "$cmd_pid" "$tout" "$killed_marker"
     local watchdog_pid=$WATCHDOG_PID
@@ -663,9 +647,7 @@ call_codex() {
     local duration=$(( SECONDS - start_time ))
     echo "$duration" > "${outfile}.meta"
 
-    if [[ -s "$outfile" ]]; then
-        # 세션 파일에서 토큰 추출
-        extract_codex_tokens "$session_before" "${outfile}.tokens.json"
+    if [[ "$exit_code" -eq 0 && ! -f "$killed_marker" && -s "$raw_json" ]] && parse_provider_result codex "$raw_json" "$outfile"; then
         rm -f "$stderr_file" "$killed_marker"
         return 0
     else
@@ -677,8 +659,9 @@ call_codex() {
         else
             error_detail="exit=${exit_code}, ${duration}s"
         fi
+        [[ ! -s "$raw_json" ]] || cp "$raw_json" "${outfile}.partial"
         echo "[오류: Codex 호출 실패 (${error_detail})]" > "$outfile"
-        echo '{}' > "${outfile}.tokens.json"
+        echo '{"available":false,"reason":"call failed"}' > "${outfile}.tokens.json"
         rm -f "$killed_marker"
         return 1
     fi
@@ -842,7 +825,7 @@ build_synthesis_prompt() {
     local agent_count=$ACTIVE_COUNT
     local agent_names=""
     $USE_CLAUDE && agent_names+="$(agent_label claude), "
-    $USE_GEMINI && agent_names+="Gemini/3.1-Pro-Preview, "
+    $USE_GEMINI && agent_names+="Gemini/${GEMINI_MODEL}, "
     $USE_CODEX && agent_names+="$(agent_label codex), "
     agent_names="${agent_names%, }"
 
@@ -878,7 +861,7 @@ $(cat "${SESSION_DIR}/r${round}_claude.md")
     fi
     if $USE_GEMINI && [[ -f "${SESSION_DIR}/r${round}_gemini.md" ]] && validate_response "${SESSION_DIR}/r${round}_gemini.md"; then
         opinions+="
-### 전문가 B — Gemini/3.1-Pro-Preview
+### 전문가 B — Gemini/${GEMINI_MODEL}
 $(cat "${SESSION_DIR}/r${round}_gemini.md")
 "
     fi
@@ -1352,7 +1335,7 @@ $(collect_previous_opinions "$r")
             fi
         fi
     elif $USE_GEMINI; then
-        log_info "━━━ 최종 종합 (Gemini/3.1-Pro-Preview) ━━━"
+        log_info "━━━ 최종 종합 (Gemini/${GEMINI_MODEL}) ━━━"
         if call_gemini "$synthesis_prompt" "$final_file"; then
             log_ok "종합 완료"
         else
@@ -1431,7 +1414,7 @@ build_structured_report() {
         echo "| Agent | Round | Input | Output | Cached | Total |"
         echo "|-------|-------|-------|--------|--------|-------|"
         for ((r = 1; r <= ROUNDS; r++)); do
-            for agent in gemini codex; do
+            for agent in claude gemini codex; do
                 local tf="${SESSION_DIR}/r${r}_${agent}.md.tokens.json"
                 [[ ! -s "$tf" ]] && continue
                 local t_total

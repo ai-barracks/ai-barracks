@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.4.0] - 2026-10-01
+
+### Added
+- Opt-in project Codex native lifecycle hooks with payload-based session identity, idempotent resume, concurrent thread routing, wrapper interoperability and explicit `/hooks` trust requirement.
+- `aib start --model/--effort` forwards explicit profiles and initial tasks without changing provider configuration.
+
+### Changed
+- Council uses runtime model/effort defaults with explicit environment overrides and accurate labels. User config is deliberately excluded from isolated Codex Council calls.
+- Claude Council disables tools/MCP/hooks; Codex uses read-only sandbox and isolated config/integrations. Gemini no longer receives `--yolo` (equivalent isolation remains unverified).
+- Codex native `.agents/skills` links now accompany Claude links and the portable Markdown catalog.
+- Session protocol prioritizes hook-injected identity / `MAP_SESSION_ID` instead of the shared legacy `.active` hint.
+- Council validates terminal JSON/JSONL success and captures usage from each call. Removed Keychain quota scraping and cross-session usage attribution; absent usage stays unavailable.
+
+### Fixed
+- Preserve user-authored native skill directories and foreign symlinks on conflicts; remove only owned orphan links.
+- Reject partial Council outputs on nonzero exit/timeout and retain diagnostic partial artifacts.
+- Ignore `.DS_Store`/AppleDouble template artifacts; copy unlisted binary assets without text substitution.
+- Interpret notification subtypes instead of treating every notification as an approval block; wire PermissionRequest.
+
+### Verification
+- Added isolated shell runner, native skills preservation regressions, default/override model tests, partial-failure tests and macOS CI.
+- Homebrew formulas declare `jq` and exercise isolated init/dry-run sync. Tap archive URL/hash are updated only after the release archive is available.
+
+
 ## [1.3.4] - 2026-06-02
 
 ### Fixed

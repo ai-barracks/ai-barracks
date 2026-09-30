@@ -45,15 +45,16 @@ test_false_success_prevention() {
     cat > "$td/claude" <<'SH'
 #!/usr/bin/env bash
 echo "CLAUDE_ARGS:$*" >> "${COUNCIL_STUB_CALLS:?}"
-echo "Claude stub provides a thorough valid response with sufficient words exceeding the twenty word minimum threshold so council response validation succeeds for this regression test."
+printf '%s\n' '{"type": "result", "subtype": "success", "is_error": false, "result": "Claude stub provides a thorough valid response with sufficient words exceeding the twenty word minimum threshold so council response validation succeeds for this regression test.", "usage": {"input_tokens": 12, "output_tokens": 34, "cache_read_input_tokens": 5}}'
 SH
 
-    # Codex stub: fails — no stdout, exit non-zero. Council should treat
+    # Codex stub: partial valid-looking stdout, exit non-zero. Council should treat
     # this round as having only 1 valid response and refuse to synthesise.
     cat > "$td/codex" <<'SH'
 #!/usr/bin/env bash
 echo "CODEX_ARGS:$*" >> "${COUNCIL_STUB_CALLS:?}"
-exit 1
+echo "This partial response contains sufficient words to look valid but the provider exited with an error so it must never count as a successful opinion."
+exit 7
 SH
 
     make_security_stub "$td"
@@ -123,13 +124,13 @@ echo "CLAUDE_ARGS:$*" >> "${COUNCIL_STUB_CALLS:?}"
 echo "CLAUDE_CWD:$PWD" >> "${COUNCIL_STUB_CALLS:?}"
 # Emulate the hook side-effect we are trying to keep out of the barrack.
 [[ -f "sessions/.active" ]] && rm -f "sessions/.active"
-echo "Claude stub returns valid response with enough words to satisfy the twenty word minimum threshold for council validation during this isolation regression test."
+printf '%s\n' '{"type": "result", "subtype": "success", "is_error": false, "result": "Claude stub returns valid response with enough words to satisfy the twenty word minimum threshold for council validation during this isolation regression test.", "usage": {"input_tokens": 12, "output_tokens": 34, "cache_read_input_tokens": 5}}'
 SH
 
     cat > "$td/codex" <<'SH'
 #!/usr/bin/env bash
 echo "CODEX_ARGS:$*" >> "${COUNCIL_STUB_CALLS:?}"
-echo "Codex stub returns valid response with adequate words exceeding the twenty word minimum threshold so council can proceed to synthesis for this regression."
+printf '%s\n' '{"type": "item.completed", "item": {"type": "agent_message", "text": "Codex stub returns valid response with adequate words exceeding the twenty word minimum threshold so council can proceed to synthesis for this regression."}}' '{"type": "turn.completed", "usage": {"input_tokens": 23, "output_tokens": 45, "cached_input_tokens": 7}}'
 SH
 
     make_security_stub "$td"
@@ -180,7 +181,7 @@ test_orphan_cleanup() {
     cat > "$td/claude" <<'SH'
 #!/usr/bin/env bash
 echo "CLAUDE_ARGS:$*" >> "${COUNCIL_STUB_CALLS:?}"
-echo "Claude stub returns valid response with sufficient words exceeding the twenty word minimum so council can detect first-completion and start the grace timer reliably."
+printf '%s\n' '{"type": "result", "subtype": "success", "is_error": false, "result": "Claude stub returns valid response with sufficient words exceeding the twenty word minimum so council can detect first-completion and start the grace timer reliably.", "usage": {"input_tokens": 12, "output_tokens": 34, "cache_read_input_tokens": 5}}'
 SH
 
     # Slow codex stub — spawns a long-lived "marker" subprocess and then
