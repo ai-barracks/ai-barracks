@@ -5,7 +5,7 @@
 상세 가이드는 docs/ 참조.
 
 ## 세션 시작 (CRITICAL)
-1. `sessions/.active` → 세션 ID 확인
+1. hook의 `[AIB SESSION]` 경로 또는 `MAP_SESSION_ID` → 자신의 세션 ID 확인 (`sessions/.active`는 동시 세션에서 신뢰하지 않는 legacy 힌트)
 2. `sessions/{세션ID}.md` → 자신의 세션 파일 인지
 3. 첫 사용자 메시지 후 **Task** 필드를 실제 작업 내용으로 업데이트
 4. `RULES.md` 읽기 — 이전 세션에서 학습한 규칙 확인

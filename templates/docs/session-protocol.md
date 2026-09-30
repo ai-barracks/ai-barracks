@@ -4,12 +4,12 @@
 ## Session Layer (SESSIONS.md + sessions/)
 
 SESSIONS.md 등록/해제와 sessions/ 파일 생성은 hook이 자동 처리한다.
-LLM의 핵심 의무는 **sessions/{AIB_SESSION_ID}.md 파일을 업데이트하는 것**이다.
+LLM의 핵심 의무는 **sessions/{MAP_SESSION_ID}.md 파일을 업데이트하는 것**이다.
 
 ### 세션 시작 — LLM이 반드시 수행할 것
 Hook이 SESSIONS.md 등록과 세션 파일 생성을 자동 처리한다.
 LLM은 세션 시작 시 반드시 다음을 수행한다:
-1. `sessions/.active` 파일을 읽어 현재 세션 ID를 확인
+1. hook이 제공한 `[AIB SESSION]` 경로 또는 환경변수 `MAP_SESSION_ID`로 자신의 ID를 확인. `sessions/.active`는 legacy 힌트일 뿐이며 동시 세션에서 자기 ID로 가정하지 않는다. ID가 없으면 추측하지 말고 보고한다.
 2. `sessions/{세션ID}.md` 파일을 읽어 자신의 세션 파일을 인지
 3. 첫 사용자 메시지 후 **Task** 필드를 실제 작업 내용으로 업데이트
 4. `RULES.md` 읽기 — 이전 세션에서 학습한 규칙 확인

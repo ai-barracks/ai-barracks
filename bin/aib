@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# aib — AI Barracks CLI v1.2.3
+# aib — AI Barracks CLI v1.4.0
 # Usage: aib <command> [args]
 #
 # Commands:
@@ -16,11 +16,13 @@
 
 set -euo pipefail
 
-AIB_VERSION="1.3.4"
+AIB_VERSION="1.4.0"
 # Use BASH_SOURCE[0] so `source bin/aib` works from any cwd
 # (AIB_SOURCE_ONLY=1 source "$AIB_BIN" is used by tests after `cd`).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
+
+source "$(dirname "$TEMPLATE_DIR")/scripts/native-codex.sh"
 
 # --- Colors (stderr only for hooks — stdout is for LLM context) ---
 RED='\033[0;31m'
@@ -111,6 +113,18 @@ make_session_id() {
     echo "${client}-${ts}-${entropy}"
 }
 
+render_session_context() {
+    AIB_CTX_ID="$1" AIB_CTX_CLIENT="$2" AIB_CTX_STARTED="$3" AIB_CTX_TASK="$4" awk '
+      function literal(s, key, value, out, n) {
+        out=""; while ((n=index(s,key))>0) {out=out substr(s,1,n-1) value; s=substr(s,n+length(key))} return out s
+      }
+      { s=literal($0,"{{SESSION_ID}}",ENVIRON["AIB_CTX_ID"]);
+        s=literal(s,"{{CLIENT_NAME}}",ENVIRON["AIB_CTX_CLIENT"]);
+        s=literal(s,"{{STARTED}}",ENVIRON["AIB_CTX_STARTED"]);
+        print literal(s,"{{TASK}}",ENVIRON["AIB_CTX_TASK"]) }
+    ' "$TEMPLATE_DIR/session-context.md"
+}
+
 ensure_sessions_md() {
     if [ ! -f "SESSIONS.md" ]; then
         cp "$TEMPLATE_DIR/SESSIONS.md" "SESSIONS.md"
@@ -122,7 +136,7 @@ ensure_sessions_dir() {
 }
 
 # --- Global barrack registry (~/.aib/barracks.json) ---
-AIB_REGISTRY="$HOME/.aib/barracks.json"
+AIB_REGISTRY="${AIB_REGISTRY:-$HOME/.aib/barracks.json}"
 
 ensure_registry() {
     mkdir -p "$HOME/.aib"
@@ -245,7 +259,7 @@ summarize_session() {
 - 해당 없으면 분류별 사유 기술 (예: \"(없음 — wiki: 단순 파일 수정 / RULES: 교정 없음)\")
 
 원본 기록:
-$(head -300 "$clean_file")" --output-format text --model claude-sonnet-4-6 2>/dev/null || true)
+$(head -300 "$clean_file")" --output-format text --model "${AIB_SUMMARY_MODEL:-sonnet}" 2>/dev/null || true)
 
     if [ -n "$summary" ]; then
         # Replace empty sections in session file with LLM summary
@@ -701,13 +715,22 @@ cmd_hook_event() {
     case "$event" in
         SessionStart)            state=working; reason=session_start ;;
         PreToolUse|PostToolUse)  state=working; reason=tool_activity ;;
-        Notification)            state=blocked; reason=approval_required ;;
+        PermissionRequest)       state=blocked; reason=approval_required ;;
+        Notification)
+            # Informational/idle/auth notifications must not look like approvals.
+            local payload="" notification_type=""
+            [ -t 0 ] || payload="$(head -c 65536)"
+            notification_type="$(printf '%s' "$payload" | jq -r '.notification_type // empty' 2>/dev/null)" || true
+            case "$notification_type" in
+                permission_prompt|elicitation_dialog|elicitation_url_dialog)
+                    state=blocked; reason=approval_required ;;
+                *) return 0 ;;
+            esac
+            ;;
         Stop|SessionEnd)         state=done;    reason=turn_complete ;;
         SubagentStop)            return 0 ;;       # subagent end != session end
         *)                       return 0 ;;
     esac
-    # Note: if Notification over-fires (Task 1 risk), read stdin payload here and
-    # only map to blocked on an approval/input pattern. v1 maps unconditionally.
     AIB_LIVE_CLIENT="$client" aib_live_write "$sid" "$state" "$event" "$reason" || true
     return 0
 }
@@ -840,6 +863,7 @@ configure_hooks() {
               --arg end "aib hook end claude" \
               --arg pre "aib hook event claude PreToolUse" \
               --arg post "aib hook event claude PostToolUse" \
+              --arg permission "aib hook event claude PermissionRequest" \
               --arg notif "aib hook event claude Notification" \
               --arg stop "aib hook event claude Stop" \
               'def ensure(ev; cmd):
@@ -848,7 +872,7 @@ configure_hooks() {
                .hooks = (.hooks // {})
                | ensure("SessionStart"; $start) | ensure("SessionEnd"; $end)
                | ensure("PreToolUse"; $pre)     | ensure("PostToolUse"; $post)
-               | ensure("Notification"; $notif) | ensure("Stop"; $stop)' \
+               | ensure("PermissionRequest"; $permission) | ensure("Notification"; $notif) | ensure("Stop"; $stop)' \
               "$claude_settings" > "$tmp" 2>/dev/null
             if jq empty "$tmp" 2>/dev/null; then
                 mv "$tmp" "$claude_settings"
@@ -890,7 +914,7 @@ configure_hooks() {
 
     # Codex CLI
     if command -v codex &>/dev/null; then
-        log_warn "Codex CLI: no SessionEnd hook support — use 'aib start codex' wrapper for session tracking"
+        log_warn "Codex CLI: native hooks are available in supported versions; this installation uses the aib start codex compatibility wrapper"
     else
         log_info "Codex CLI not installed, skipping"
     fi
@@ -1039,65 +1063,57 @@ inject_skills_section() {
     done
 }
 
-# Maintain .claude/skills/<n> -> ../../skills/<n> relative symlinks so that
-# Claude Code's project-local skill discovery picks them up automatically.
-# Idempotent: replaces existing symlinks and removes orphans.
-sync_claude_skills_symlinks() {
-    local target="$1"
-    local skills_dir="$target/skills"
-    local claude_skills_dir="$target/.claude/skills"
-
-    if [ ! -d "$skills_dir" ]; then
-        # No skills — clear the .claude/skills/ directory entirely (orphan-only)
-        if [ -d "$claude_skills_dir" ]; then
-            find "$claude_skills_dir" -mindepth 1 -maxdepth 1 -type l -delete 2>/dev/null || true
-        fi
-        return 0
+# Materialize only AIB-owned links. Never delete native/user-authored skills.
+sync_native_skills_symlinks() {
+    local target="$1" client_dir="$2"
+    local skills_dir="$target/skills" native_dir="$target/$client_dir/skills"
+    if [ -L "$target/$client_dir" ] || [ -L "$native_dir" ]; then
+        log_err "Refusing symlinked native skill parent: $native_dir"
+        return 1
     fi
-
-    mkdir -p "$claude_skills_dir"
-
-    # 1. Create/refresh symlinks for every skill that has SKILL.md
-    local linked=0
+    mkdir -p "$native_dir"
+    local skill_md slug link expected
+    # Preflight all collisions before modifying links for this client.
     for skill_md in "$skills_dir"/*/SKILL.md; do
         [ -f "$skill_md" ] || continue
-        local slug
         slug="$(basename "$(dirname "$skill_md")")"
-        local link="$claude_skills_dir/$slug"
-        # Force-replace (handles slug rename, broken link, regular dir)
-        rm -rf "$link"
-        ln -s "../../skills/$slug" "$link"
-        linked=$((linked + 1))
-    done
-
-    # 2. Remove orphan symlinks whose source no longer exists
-    if [ -d "$claude_skills_dir" ]; then
-        for entry in "$claude_skills_dir"/*; do
-            [ -L "$entry" ] || continue
-            local slug
-            slug="$(basename "$entry")"
-            if [ ! -f "$skills_dir/$slug/SKILL.md" ]; then
-                rm -f "$entry"
-                log_info "Removed orphan symlink: .claude/skills/$slug"
+        link="$native_dir/$slug"; expected="../../skills/$slug"
+        if [ -e "$link" ] || [ -L "$link" ]; then
+            if [ ! -L "$link" ] || [ "$(readlink "$link")" != "$expected" ]; then
+                log_err "Native skill conflict (preserved): $link"
+                return 1
             fi
-        done
-    fi
-
-    [ "$linked" -gt 0 ] && log_ok "Synced $linked Claude skill symlink(s) under .claude/skills/"
-    return 0
+        fi
+    done
+    for skill_md in "$skills_dir"/*/SKILL.md; do
+        [ -f "$skill_md" ] || continue
+        slug="$(basename "$(dirname "$skill_md")")"
+        link="$native_dir/$slug"
+        [ -L "$link" ] || ln -s "../../skills/$slug" "$link"
+    done
+    for link in "$native_dir"/*; do
+        [ -L "$link" ] || continue
+        slug="$(basename "$link")"
+        if [ "$(readlink "$link")" = "../../skills/$slug" ] && [ ! -f "$skills_dir/$slug/SKILL.md" ]; then
+            rm -f "$link"
+        fi
+    done
+    log_ok "Synced native skills under $client_dir/skills (user files preserved)"
 }
 
-# Ensure .claude/skills/ is gitignored. Append if .gitignore exists and entry missing.
-# Does NOT create .gitignore if absent (cmd_init's responsibility).
+sync_claude_skills_symlinks() { sync_native_skills_symlinks "$1" .claude; }
+sync_codex_skills_symlinks() { sync_native_skills_symlinks "$1" .agents; }
+
+# Runtime native links are regenerated by sync; preserve unrelated ignore entries.
 ensure_gitignore_skills_entry() {
-    local target="$1"
-    local gi="$target/.gitignore"
+    local gi="$1/.gitignore" entry
     [ -f "$gi" ] || return 0
-    if ! grep -qx ".claude/skills/" "$gi"; then
-        # Append with a comment line on first amendment
-        printf '\n# aib v1.2.0: runtime symlinks materialized by `aib sync`\n.claude/skills/\n' >> "$gi"
-        log_ok "Added .claude/skills/ to .gitignore"
-    fi
+    for entry in .claude/skills/ .agents/skills/; do
+        if ! grep -Fqx "$entry" "$gi"; then
+            printf '\n%s\n' "$entry" >> "$gi"
+            log_ok "Added $entry to .gitignore"
+        fi
+    done
 }
 
 # Read-only check: are the materialized W1/W2 wirings in sync with skills/?
@@ -1105,34 +1121,38 @@ ensure_gitignore_skills_entry() {
 check_skills_drift() {
     local target="$1"
     local skills_dir="$target/skills"
-    local claude_skills_dir="$target/.claude/skills"
     local drifted=0
 
     if [ ! -d "$skills_dir" ]; then
         return 0
     fi
 
-    # 1. W1 drift: every skill should have a symlink, every symlink a skill
-    for skill_md in "$skills_dir"/*/SKILL.md; do
-        [ -f "$skill_md" ] || continue
-        local slug
-        slug="$(basename "$(dirname "$skill_md")")"
-        if [ ! -L "$claude_skills_dir/$slug" ]; then
-            log_warn "Skills drift (W1): missing .claude/skills/$slug — run 'aib sync'"
+    # Native discovery: check only AIB-owned links, not arbitrary user skills.
+    local client_dir native_dir entry slug
+    for client_dir in .claude .agents; do
+        native_dir="$target/$client_dir/skills"
+        if [ -L "$target/$client_dir" ] || [ -L "$native_dir" ]; then
+            log_warn "Skills drift: symlinked native parent $native_dir"
             drifted=1
+            continue
         fi
-    done
-    if [ -d "$claude_skills_dir" ]; then
-        for entry in "$claude_skills_dir"/*; do
-            [ -L "$entry" ] || continue
-            local slug
-            slug="$(basename "$entry")"
-            if [ ! -f "$skills_dir/$slug/SKILL.md" ]; then
-                log_warn "Skills drift (W1): orphan .claude/skills/$slug — run 'aib sync'"
+        for skill_md in "$skills_dir"/*/SKILL.md; do
+            [ -f "$skill_md" ] || continue
+            slug="$(basename "$(dirname "$skill_md")")"
+            if [ ! -L "$native_dir/$slug" ] || [ "$(readlink "$native_dir/$slug")" != "../../skills/$slug" ]; then
+                log_warn "Skills drift: missing/conflicting $client_dir/skills/$slug — run 'aib sync'"
                 drifted=1
             fi
         done
-    fi
+        for entry in "$native_dir"/*; do
+            [ -L "$entry" ] || continue
+            slug="$(basename "$entry")"
+            if [ "$(readlink "$entry")" = "../../skills/$slug" ] && [ ! -f "$skills_dir/$slug/SKILL.md" ]; then
+                log_warn "Skills drift: orphan $client_dir/skills/$slug — run 'aib sync'"
+                drifted=1
+            fi
+        done
+    done
 
     # 2. W2 drift: re-render the block and diff against what's in CLAUDE.md
     # (We pick CLAUDE.md as the witness — all three are kept identical.)
@@ -1200,11 +1220,7 @@ cmd_hook_start() {
 
     # Create session context file
     local ctx_file="sessions/${session_id}.md"
-    sed -e "s|{{SESSION_ID}}|${session_id}|g" \
-        -e "s|{{CLIENT_NAME}}|${cname}|g" \
-        -e "s|{{STARTED}}|${started}|g" \
-        -e "s|{{TASK}}|${ctx_task}|g" \
-        "$TEMPLATE_DIR/session-context.md" > "$ctx_file"
+    render_session_context "$session_id" "$cname" "$started" "$ctx_task" > "$ctx_file"
     log_info "Session context: ${ctx_file}"
 
     # Export session ID for the CLI to use
@@ -1509,9 +1525,14 @@ cmd_start() {
     local client=""
     local task=""
     local skip_permissions=false
+    local model="" effort=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --model|--effort)
+                [ $# -ge 2 ] && [ -n "$2" ] || { log_err "$1 requires a value"; exit 1; }
+                if [ "$1" = --model ]; then model="$2"; else effort="$2"; fi
+                shift 2 ;;
             --skip-permissions) skip_permissions=true; shift ;;
             -*)  log_err "Unknown option: $1"; exit 1 ;;
             *)
@@ -1528,6 +1549,18 @@ cmd_start() {
         log_err "Usage: aib start <claude|gemini|codex> [task] [--skip-permissions]"
         exit 1
     fi
+
+    case "$client" in claude|codex|gemini) ;; *) log_err "Unknown client: $client"; exit 1 ;; esac
+    local launch_args=()
+    [ -z "$model" ] || launch_args+=(--model "$model")
+    if [ -n "$effort" ]; then
+        case "$client:$effort" in
+            claude:low|claude:medium|claude:high|claude:max) launch_args+=(--effort "$effort") ;;
+            codex:none|codex:minimal|codex:low|codex:medium|codex:high|codex:xhigh) launch_args+=(-c "model_reasoning_effort=\"$effort\"") ;;
+            *) log_err "Unsupported effort for $client: $effort"; exit 1 ;;
+        esac
+    fi
+    [ -z "$task" ] || launch_args+=("$task")
 
     # Build permission-skip flags per client (computed up-front so both branches see them).
     local skip_flags=""
@@ -1556,7 +1589,7 @@ cmd_start() {
             export AIB_START_TASK="$task"
             log_info "Wrapper task -> AIB_START_TASK=\"$task\""
         fi
-        exec "$client" $skip_flags
+        exec "$client" $skip_flags ${launch_args[@]+"${launch_args[@]}"}
     fi
 
     # Non-Claude clients (Gemini / Codex): wrapper still owns the session row
@@ -1579,11 +1612,7 @@ cmd_start() {
 
     # Create session context file
     local ctx_file="sessions/${session_id}.md"
-    sed -e "s|{{SESSION_ID}}|${session_id}|g" \
-        -e "s|{{CLIENT_NAME}}|${cname}|g" \
-        -e "s|{{STARTED}}|${started}|g" \
-        -e "s|{{TASK}}|${task_desc}|g" \
-        "$TEMPLATE_DIR/session-context.md" > "$ctx_file"
+    render_session_context "$session_id" "$cname" "$started" "$task_desc" > "$ctx_file"
 
     local raw_file="sessions/${session_id}.raw"
 
@@ -1599,7 +1628,9 @@ cmd_start() {
             grep -v "^| ${session_id} " "SESSIONS.md" > "$tmp" 2>/dev/null || true
             mv "$tmp" "SESSIONS.md"
         fi
-        rm -f "sessions/.active"
+        if [ "$(_active_session_id)" = "$session_id" ]; then
+            rm -f "sessions/.active"
+        fi
 
         # 2. Mark completed
         if [ -f "$ctx_file" ]; then
@@ -1621,11 +1652,15 @@ cmd_start() {
     # Write active session marker
     echo "${session_id}" > "sessions/.active"
 
+    # Per-process identity wins over the shared legacy marker in concurrent sessions.
+    export MAP_SESSION_ID="$session_id"
+    export AIB_WRAPPER_SESSION_ID="$session_id" AIB_WRAPPER_ROOT="$(pwd -P)"
+
     # Launch CLI with script capture (Gemini/Codex)
     if [ -n "$skip_flags" ]; then
-        script -q "$raw_file" "$client" $skip_flags
+        script -q "$raw_file" "$client" $skip_flags ${launch_args[@]+"${launch_args[@]}"}
     else
-        script -q "$raw_file" "$client"
+        script -q "$raw_file" "$client" ${launch_args[@]+"${launch_args[@]}"}
     fi
 }
 
@@ -2005,12 +2040,16 @@ sync_new_files() {
                 log_info "[dry-run] Would create: $rel (new template, not in manifest)"
             else
                 mkdir -p "$(dirname "$dest")"
-                sed "s|{{WORKSPACE_NAME}}|${ws_name}|g; s|{{AIB_VERSION}}|${AIB_VERSION}|g" \
-                    "$TEMPLATE_DIR/$rel" > "$dest"
+                if LC_ALL=C grep -Iq . "$tpl_file" || [ ! -s "$tpl_file" ]; then
+                    sed "s|{{WORKSPACE_NAME}}|${ws_name}|g; s|{{AIB_VERSION}}|${AIB_VERSION}|g" \
+                        "$tpl_file" > "$dest"
+                else
+                    cp "$tpl_file" "$dest"
+                fi
                 log_ok "Created: $rel (new template)"
             fi
         fi
-    done < <(find "$TEMPLATE_DIR" -type f -not -name '.sync-manifest')
+    done < <(find "$TEMPLATE_DIR" -type f -not -name '.sync-manifest' -not -name '.DS_Store' -not -name '._*')
 }
 
 # Sync: ensure H2 sections from template exist in barrack file
@@ -2196,10 +2235,11 @@ cmd_sync() {
 
     # 2b. v1.2.0: skills wirings — must run AFTER sync_new_files so auto-seeded skills are visible
     if $dry_run; then
-        log_info "[dry-run] Would update skills section + .claude/skills/ symlinks + .gitignore entry"
+        log_info "[dry-run] Would update skills catalog + Claude/Codex native symlinks + .gitignore entries"
     else
         inject_skills_section "$target"
         sync_claude_skills_symlinks "$target"
+        sync_codex_skills_symlinks "$target"
         ensure_gitignore_skills_entry "$target"
     fi
 
@@ -2394,11 +2434,13 @@ case "${1:-}" in
         case "${1:-}" in
             start)    shift; cmd_hook_start "$@" ;;
             end)      shift; cmd_hook_end "$@" ;;
+            native) shift; [ "${1:-}" = codex ] || exit 1; cmd_hook_native_codex ;;
             continue) shift; cmd_hook_continue "$@" ;;
             event)    shift; cmd_hook_event "$@" ;;
             *)        log_err "Usage: aib hook <start|end|continue|event> [args]"; exit 1 ;;
         esac
         ;;
+    hooks) shift; [ "${1:-}" = codex ] && [ "${2:-}" = install ] || { log_err "Usage: aib hooks codex install [path]"; exit 1; }; shift 2; cmd_hooks_codex_install "$@" ;;
     status)  cmd_status ;;
     sync)    shift; cmd_sync "$@" ;;
     council) shift; cmd_council "$@" ;;
@@ -2436,6 +2478,7 @@ case "${1:-}" in
         echo "  init [path]                    Initialize barrack + configure hooks"
         echo "  start <client> [task] [--skip-permissions]  Start LLM session with tracking"
         echo "  hook start <client>            (Auto) Called by CLI SessionStart hooks"
+        echo "  hooks codex install [path]      Install opt-in native project hooks (requires /hooks trust)"
         echo "  hook end <client>              (Auto) Called by CLI SessionEnd hooks"
         echo "  hook continue <session_id>     Continue another CLI's session"
         echo "  barracks [list|remove|route|refresh]   Manage registered barracks"

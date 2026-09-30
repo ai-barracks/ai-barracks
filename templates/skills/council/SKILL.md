@@ -1,6 +1,6 @@
 ---
 name: council
-description: "Use when an architectural decision, technology comparison, critical code review, or any high-stakes choice would benefit from cross-validation by independent LLMs. Defaults to Claude Opus 4.8 high + Codex GPT-5.5 medium; Gemini is optional via `--gemini`. Triggers a multi-round debate via upstream `ai-barracks/scripts/council.sh`."
+description: "Use when an architectural decision, technology comparison, critical code review, or any high-stakes choice would benefit from cross-validation by independent LLMs. Uses the installed Claude/Codex runtime defaults unless explicitly overridden; Gemini is optional via `--gemini`. Triggers a multi-round debate via upstream `ai-barracks/scripts/council.sh`."
 argument-hint: "<topic> [-m debate|adversarial|pipeline] [-r rounds] [--consensus N]"
 allowed-tools: Bash(./scripts/council.sh *), Bash(council.sh *), Read, Write
 aib_version: "1.1"
@@ -10,7 +10,7 @@ growth_origin: "manual"
 
 # LLM Council — 멀티라운드 교차 리뷰
 
-기본 2개 AI(Claude Opus 4.8 high, Codex GPT-5.5 medium)가 같은 주제를 두고 멀티라운드 디베이트한 뒤 합의안을 도출한다. Gemini는 현재 기본 제외이며 필요 시 `--gemini`로 포함한다. ai-barracks v1.1 표준 스킬의 reference 구현 — Anthropic Agent Skills 호환 frontmatter + ai-barracks 확장 필드 사용.
+기본 2개 AI(Claude Code, Codex CLI — 모델/effort는 runtime 기본값)가 같은 주제를 두고 멀티라운드 디베이트한 뒤 합의안을 도출한다. Gemini는 현재 기본 제외이며 필요 시 `--gemini`로 포함한다. ai-barracks v1.1 표준 스킬의 reference 구현 — Anthropic Agent Skills 호환 frontmatter + ai-barracks 확장 필드 사용.
 
 ## When to Invoke
 

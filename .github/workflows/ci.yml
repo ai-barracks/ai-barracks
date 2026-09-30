@@ -1,0 +1,14 @@
+name: CLI regression
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  shell:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install jq
+      - name: Shell syntax
+        run: find bin scripts tests -type f \( -name '*.sh' -o -name aib \) -exec /bin/bash -n {} \;
+      - name: Isolated regression (no model calls)
+        run: /bin/bash tests/run.sh

@@ -67,7 +67,7 @@ DB도 서버도 SaaS도 필요 없습니다. **Git repo 하나가 에이전트�
 | 🗳️ **Multi-LLM Council** | 기본 Claude + Codex 병렬 실행으로 합의 도출 (`--gemini`로 Gemini 포함 가능) |
 | 🌐 **Barrack Registry** | 프로젝트별 배럭 관리 + 키워드 기반 라우팅 (Slack bot 연동) |
 | 🧾 **Veritable Records** | 세션 기록은 절대 지우지 않는 실록(Silok) — 의사결정 이력의 영구 보존 |
-| 🧪 **Skills** | `skills/<slug>/SKILL.md`를 first-class 자원으로 다룹니다 — Anthropic Agent Skills 표준 + ai-barracks 확장(`aib_version`, `upstream`). v1.2부터 `aib sync`가 Claude Code용 `.claude/skills/<slug>` 심볼릭 링크(W1)와 Gemini/Codex용 `Available Skills` 카탈로그 블록(W2)을 자동 wiring. |
+| 🧪 **Skills** | `skills/<slug>/SKILL.md`를 first-class 자원으로 다룹니다 — Anthropic Agent Skills 표준 + ai-barracks 확장(`aib_version`, `upstream`). `aib sync`가 Claude `.claude/skills/<slug>` 및 Codex `.agents/skills/<slug>` 상대 링크(W1)와 Gemini/Codex용 `Available Skills` 카탈로그 블록(W2)을 자동 wiring. |
 
 ---
 
@@ -217,7 +217,7 @@ OpenAI/Anthropic의 Harness Engineering 패턴 — *"LLM에게 규칙을 말하�
 
 ## 🎭 Multi-LLM Council
 
-`aib council`은 기본적으로 **Claude Opus 4.8(high) + Codex GPT-5.5(medium)** 을 병렬 실행해 합의를 도출하는 토론 오케스트레이터입니다. Gemini는 현재 기본 제외이며 필요할 때 `--gemini`로 포함할 수 있습니다.
+`aib council`은 기본적으로 **Claude Code + Codex CLI (runtime default)** 을 병렬 실행해 합의를 도출하는 토론 오케스트레이터입니다. Gemini는 현재 기본 제외이며 필요할 때 `--gemini`로 포함할 수 있습니다.
 
 ```bash
 aib council "REST vs gRPC"
@@ -226,13 +226,25 @@ aib council -m pipeline "ClickHouse 마이그레이션 전략"
 aib council --json -o result.json -r 2 "마이크로서비스 vs 모놀리스"
 ```
 
+### 모델과 실행 안전성
+
+기본 model/effort는 CLI runtime에 맡깁니다. 계정별 가용성이 확인된 모델만 환경변수로 선택하세요:
+
+```bash
+AIB_COUNCIL_CLAUDE_MODEL=sonnet AIB_COUNCIL_CLAUDE_EFFORT=high \
+AIB_COUNCIL_CODEX_MODEL='your-available-model-id' AIB_COUNCIL_CODEX_EFFORT=medium \
+aib council "검토 주제"
+```
+
+Council은 전달된 텍스트를 분석하는 경로입니다. Claude built-in/MCP tools와 hooks를 비활성화하고, Codex는 read-only sandbox 및 user-config/통합 기능 격리를 사용합니다. 기존 Council의 권한 우회는 기본값에서 제거했습니다. Gemini도 `--yolo`를 넘기지 않지만, 동등한 tool 격리 검증은 아직 미완료입니다. 미지원 CLI flag는 실패하며 자동으로 우회하지 않습니다. Codex의 user config를 제외하므로 저장한 model/effort 대신 runtime 기본값 또는 위 override를 사용합니다. 최신 설치·계정과 실제 호출 E2E는 별도 검증이 필요합니다.
+
 ### 3가지 토론 모드
 
 | Mode | 설명 |
 |------|------|
 | `debate` *(기본)* | 자유 분석 → 교차 리뷰 |
 | `adversarial` | 매 라운드 1명이 반대론자(Devil's Advocate) 역할 |
-| `pipeline` | 역할 고정: Claude 계획/구현 → Codex 리뷰 (`--gemini` 사용 시 Gemini 계획) |
+| `pipeline` | 역할 고정: Claude 설계안 작성 → Codex 리뷰 (`--gemini` 사용 시 Gemini 계획) |
 
 ### 영리한 최적화
 
@@ -240,8 +252,8 @@ aib council --json -o result.json -r 2 "마이크로서비스 vs 모놀리스"
 - **Consensus-based Early Termination** — LLM-as-judge가 합의도 85+ 점수 산출 시 남은 라운드 skip. 토큰 절약.
 - **Session-based Resume** — 중단된 토론을 `--resume <session_id>`로 이어받기.
 - **Claude Code 감지** — `CLAUDECODE=1` 환경에서도 기본적으로 Claude CLI를 별도 `claude -p` 프로세스로 참여시킴. 이전처럼 제외하려면 `AIB_COUNCIL_DISABLE_CLAUDE_IN_CLAUDECODE=1`.
-- **Token Accounting** — Codex는 `~/.codex/sessions/`의 rollout JSONL 파일을 세션 전후 비교로 파싱. Gemini를 켠 경우 JSON 응답에서 토큰을 추출. 라운드별 토큰 사용량 자동 추적.
-- **Claude OAuth Quota** — macOS Keychain에서 토큰 추출 → `/api/oauth/usage` 엔드포인트 호출로 5h/7d 사용률 실시간 체크.
+- **Usage provenance** — 다른 Codex 세션의 rollout을 읽지 않습니다. 현재 Codex per-call usage는 unavailable로 기록하며, Gemini 사용량은 해당 호출의 JSON 응답에서만 추출합니다.
+- **Quota privacy** — Keychain 토큰 추출과 비공개 OAuth quota endpoint 호출을 하지 않습니다. 한도는 provider의 공식 UI에서 확인합니다.
 
 ### Manifest 기반 기록
 
@@ -541,3 +553,24 @@ CLI 외에 데스크톱 앱으로도 배럭을 관제할 수 있습니다.
 *모델이 바뀌어도, 세션이 끝나도, 배럭은 남습니다.*
 
 [⭐ Star on GitHub](https://github.com/ai-barracks/ai-barracks)&nbsp;·&nbsp;[🐛 Report a bug](https://github.com/ai-barracks/ai-barracks/issues)&nbsp;·&nbsp;[💬 Discuss](https://github.com/ai-barracks/ai-barracks/discussions)
+
+## v1.4: runtime-first harness
+
+- 모델을 특정 과거 ID에 고정하지 않습니다. `aib start codex --model <available-id> --effort high "task"`, `aib start claude --model sonnet --effort high "task"`로 명시적으로 선택할 수 있습니다. 빈 선택은 설치 CLI 기본값이며 실제 availability는 계정·CLI가 결정합니다.
+- Council은 Claude JSON / Codex JSONL의 terminal success·exit status·timeout을 함께 확인합니다. 사용량은 해당 호출의 structured usage만 사용하고, 없으면 unavailable입니다. `AIB_COUNCIL_{CLAUDE,CODEX}_{MODEL,EFFORT}`로 override할 수 있습니다.
+- Codex native skills는 `.agents/skills`, Claude는 `.claude/skills`에 연결합니다. 사용자 directory/foreign symlink 충돌은 삭제하지 않고 중단합니다.
+
+### Codex native hooks (opt-in)
+
+```bash
+aib hooks codex install /path/to/barrack
+# Codex에서 프로젝트를 trust하고 /hooks에서 정확한 hook definition을 승인
+```
+
+지원되는 Codex에서만 적용됩니다. 설정 설치가 실행·trust를 보장하지 않으며 trust를 자동 우회하지 않습니다. 이전 CLI는 `aib start codex` wrapper를 계속 사용합니다. [공식 hooks 문서](https://learn.chatgpt.com/docs/hooks)를 확인하세요.
+
+Native payload의 session ID로 routing하므로 같은 app-server PID의 대화들을 분리합니다. Resume/compact는 기존 로그를 보존하고 SessionStart에서 identity를 재주입합니다. SessionEnd는 3초 제한 안의 metadata 정리만 수행하며 LLM summary를 실행하지 않습니다. Stop은 Codex가 요구하는 JSON을 반환합니다. Native index lock은 1초 이내 대기 후 fail-closed합니다. 강제 종료로 `sessions/.live/native/index.lock`이 남았다면 **모든 해당 프로젝트 Codex hook 프로세스가 종료된 것을 확인한 후에만** 빈 lock directory를 제거하세요.
+
+### Verification
+
+`bash tests/run.sh`는 격리 HOME·가짜 provider/credential CLI로 회귀 계약을 검사합니다. 실제 계정·모델 품질·사용량 reset을 증명하는 live eval은 아닙니다. CLI 플래그가 지원되지 않으면 isolated Council은 실패하며 권한 우회 fallback은 없습니다.

@@ -13,7 +13,7 @@ if ! command -v claude >/dev/null 2>&1; then
 fi
 
 AIB_CLAUDE_SETTINGS="$SETTINGS" AIB_GEMINI_SETTINGS="$TMP/gem.json" configure_hooks claude >/dev/null 2>&1
-for ev in SessionStart SessionEnd PreToolUse PostToolUse Notification Stop; do
+for ev in SessionStart SessionEnd PreToolUse PostToolUse PermissionRequest Notification Stop; do
   jq -e --arg e "$ev" '.hooks[$e]' "$SETTINGS" >/dev/null 2>&1 || fail "hook $ev not registered"
 done
 jq -e '.hooks.PreToolUse[0].hooks[0].command | test("hook event claude PreToolUse")' "$SETTINGS" >/dev/null 2>&1 \

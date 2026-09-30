@@ -5,6 +5,8 @@ class AiBarracks < Formula
   sha256 "0f0f69d5fd885521fdb4c8fe2f8e8b4d5cfca401fbb5fea2a7d0546e09037efb"
   license "MIT"
 
+  depends_on "jq"
+
   def install
     bin.install "bin/aib"
     pkgshare.install "templates"
@@ -17,5 +19,11 @@ class AiBarracks < Formula
 
   test do
     system bin/"aib", "version"
+    ENV["AIB_REGISTRY"] = (testpath/"registry.json").to_s
+    ENV["AIB_CLAUDE_SETTINGS"] = (testpath/"claude-settings.json").to_s
+    ENV["AIB_GEMINI_SETTINGS"] = (testpath/"gemini-settings.json").to_s
+    system bin/"aib", "init", testpath/"fixture"
+    system bin/"aib", "sync", testpath/"fixture", "--dry-run"
+    assert_path_exists testpath/"fixture/agent.yaml"
   end
 end

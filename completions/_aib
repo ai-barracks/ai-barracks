@@ -35,6 +35,7 @@ _aib_commands() {
     local -a cmds=(
         'init:Initialize barrack + configure hooks'
         'start:Start LLM session with tracking'
+        'hooks:Install opt-in project native hooks'
         'hook:Session hook commands (auto)'
         'status:Show active sessions and wiki'
         'sync:Sync templates + protocol to barrack'
@@ -75,6 +76,8 @@ _aib() {
                     _arguments \
                         '1:client:_aib_client_names' \
                         '2:task:' \
+                        '--model[Explicit runtime model]:model:' \
+                        '--effort[Reasoning effort]:effort:' \
                         '--skip-permissions[Skip permission prompts]'
                     ;;
                 hook)

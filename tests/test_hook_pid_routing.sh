@@ -67,7 +67,7 @@ mkdir -p "$BR1"
   # We assert on the RAW sidecar `.state` because the fake PIDs aren't running
   # processes, so cmd_session_state would fold them to crashed/interrupted.
   AIB_LIVE_PID="$PID_A" \
-    "$AIB_BIN" hook event claude Notification >/dev/null
+    "$AIB_BIN" hook event claude Notification <<<'{"notification_type":"permission_prompt"}' >/dev/null
   s1_state="$(jq -r .state "sessions/.live/${sid1}.status" 2>/dev/null)"
   s2_state="$(jq -r .state "sessions/.live/${sid2}.status" 2>/dev/null)"
   [ "$s1_state" = "blocked" ] \
@@ -118,7 +118,7 @@ mkdir -p "$BR2"
 
   # A PID with no mapping should fall back to .active and update the legacy sid.
   AIB_LIVE_PID=999999 AIB_LIVE_LSTART="Mon Jan  1 00:00:00 2099" \
-    "$AIB_BIN" hook event claude Notification >/dev/null
+    "$AIB_BIN" hook event claude Notification <<<'{"notification_type":"permission_prompt"}' >/dev/null
   st="$("$AIB_BIN" sessions state "$legacy_sid")"
   # PID 999999 is dead, so effective state for blocked = crashed; the key check
   # is that the legacy session's sidecar got written at all (it didn't before).
@@ -165,7 +165,7 @@ mkdir -p "$BR4"
   jq '.lstart = "Tue Jan  1 00:00:00 1970"' "$map_a" > "$tmpf" && mv "$tmpf" "$map_a"
 
   AIB_LIVE_PID="$PID_A" \
-    "$AIB_BIN" hook event claude Notification >/dev/null 2>&1
+    "$AIB_BIN" hook event claude Notification <<<'{"notification_type":"permission_prompt"}' >/dev/null 2>&1
   # sid2 must be untouched — no .active fallback occurred.
   s2_state="$(jq -r .state "sessions/.live/${sid2}.status" 2>/dev/null)"
   s2_event="$(jq -r .event "sessions/.live/${sid2}.status" 2>/dev/null)"
@@ -183,7 +183,7 @@ mkdir -p "$BR4"
   jq --arg ls "$cur_lstart" '.lstart = $ls | .client = "codex"' "$map_a" > "$tmpf" && mv "$tmpf" "$map_a"
 
   AIB_LIVE_PID="$PID_A" \
-    "$AIB_BIN" hook event claude Notification >/dev/null 2>&1
+    "$AIB_BIN" hook event claude Notification <<<'{"notification_type":"permission_prompt"}' >/dev/null 2>&1
   s2_state="$(jq -r .state "sessions/.live/${sid2}.status" 2>/dev/null)"
   s2_event="$(jq -r .event "sessions/.live/${sid2}.status" 2>/dev/null)"
   [ "$s2_state" = "working" ] && [ "$s2_event" = "SessionStart" ] \
