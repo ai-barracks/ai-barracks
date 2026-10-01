@@ -76,7 +76,7 @@ DB도 서버도 SaaS도 필요 없습니다. **Git repo 하나가 에이전트�
 ```bash
 # 1. 설치
 brew tap ai-barracks/ai-barracks
-brew install ai-barracks
+brew install ai-barracks/ai-barracks/ai-barracks
 
 # 2. 배럭 초기화 (CLI hook 자동 설정)
 cd ~/my-project
@@ -97,6 +97,12 @@ aib status
 - ✅ Claude Code / Gemini CLI의 `SessionStart`/`SessionEnd` hook 자동 주입 (`~/.claude/settings.json`, `~/.gemini/settings.json`)
 - ✅ 글로벌 배럭 레지스트리(`~/.aib/barracks.json`) 등록
 - ✅ `CLAUDE.md`, `GEMINI.md`, `AGENTS.md`에 Session-Memory Protocol 주입
+
+### 설치·업그레이드 확인
+
+공식 tap의 fully-qualified formula를 사용하고 `aib version`으로 **실제로 실행되는 CLI**를 확인하세요. 기존 `cyrok90/ai-barracks` tap 설치와 동명 formula가 충돌하면 먼저 설치 경로·설정·이전 keg를 확인하고 백업해야 합니다. CLI 업그레이드는 기존 배럭 템플릿을 자동 동기화하지 않습니다.
+
+2026-10-01 검증 환경(macOS 27 / Homebrew 5.1.15 / CLT 26.5)에서는 dependency bottle 부재·CLT 버전 요구로 Homebrew 설치가 완료되지 않아, SHA256을 확인한 v1.4.0 archive와 기존 system `jq`로 수동 설치했습니다. 지원 환경의 Homebrew CI PASS와 이 수동 설치 결과는 별개의 증거입니다. [설치·검증·복구 안내](docs/installation.md)를 확인하세요.
 
 ---
 
@@ -252,7 +258,7 @@ Council은 전달된 텍스트를 분석하는 경로입니다. Claude built-in/
 - **Consensus-based Early Termination** — LLM-as-judge가 합의도 85+ 점수 산출 시 남은 라운드 skip. 토큰 절약.
 - **Session-based Resume** — 중단된 토론을 `--resume <session_id>`로 이어받기.
 - **Claude Code 감지** — `CLAUDECODE=1` 환경에서도 기본적으로 Claude CLI를 별도 `claude -p` 프로세스로 참여시킴. 이전처럼 제외하려면 `AIB_COUNCIL_DISABLE_CLAUDE_IN_CLAUDECODE=1`.
-- **Usage provenance** — 다른 Codex 세션의 rollout을 읽지 않습니다. 현재 Codex per-call usage는 unavailable로 기록하며, Gemini 사용량은 해당 호출의 JSON 응답에서만 추출합니다.
+- **Usage provenance** — Claude terminal JSON / Codex terminal JSONL의 해당 호출 structured usage만 기록하며, 없거나 스키마가 맞지 않으면 unavailable입니다. 다른 Codex 세션의 rollout을 읽거나 사용량을 빌리지 않습니다. Gemini 사용량도 해당 호출의 JSON 응답에서만 추출합니다.
 - **Quota privacy** — Keychain 토큰 추출과 비공개 OAuth quota endpoint 호출을 하지 않습니다. 한도는 provider의 공식 UI에서 확인합니다.
 
 ### Manifest 기반 기록
@@ -542,7 +548,7 @@ CLI 외에 데스크톱 앱으로도 배럭을 관제할 수 있습니다.
 
 ## 📜 License
 
-[MIT](LICENSE)
+[MIT](https://opensource.org/license/mit)
 
 ---
 
@@ -574,3 +580,5 @@ Native payload의 session ID로 routing하므로 같은 app-server PID의 대화
 ### Verification
 
 `bash tests/run.sh`는 격리 HOME·가짜 provider/credential CLI로 회귀 계약을 검사합니다. 실제 계정·모델 품질·사용량 reset을 증명하는 live eval은 아닙니다. CLI 플래그가 지원되지 않으면 isolated Council은 실패하며 권한 우회 fallback은 없습니다.
+
+2026-10-01 후속 검증에서는 실제 설치된 v1.4.0 CLI의 `version`, 격리 HOME의 `init`, `sync --dry-run <path>` 파일 hash 불변, Codex hook definition 설치를 확인했습니다. Hook 설치는 project trust나 `/hooks` 승인을 대신하지 않으며 실제 모델을 호출하지 않았습니다. [v1.4.0 릴리즈 노트](https://github.com/ai-barracks/ai-barracks/releases/tag/v1.4.0)와 [CC native UI 검증 기록](https://github.com/ai-barracks/ai-barracks-cc/blob/main/docs/release-validation-1.5.md)을 함께 참고하세요.
