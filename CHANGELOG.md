@@ -1,5 +1,12 @@
 # Changelog
 
+## Documentation follow-up - 2026-10-01
+
+- Reconciled the README's Council usage description with per-call structured usage; missing usage remains unavailable.
+- Added post-release installed CLI smoke evidence and a macOS 27 / Homebrew / CLT limitation report, with manual layout, GUI lookup, backup and rollback guidance.
+- Distinguished supported-macOS Homebrew CI from local manual installation, and CLI installation from project-template synchronization.
+- Corrected the formula test's dry-run argument order; executable release tags, assets and archive checksums are unchanged.
+
 ## [1.4.0] - 2026-10-01
 
 ### Added
