@@ -1812,14 +1812,19 @@ cmd_council() {
         exit 1
     fi
 
-    # Locate council.sh (priority: env > workspace-local > brew-installed > fallback)
+    # Locate council.sh (priority: env > workspace-local > installed payload > fallback)
+    # The installed payload is the sibling of TEMPLATE_DIR — the same anchor used to
+    # source native-codex.sh — so versioned installs (share/ai-barracks/<ver>/) work too.
     local council_script=""
-    local script_dir
+    local script_dir payload_scripts
     script_dir="$(cd "$(dirname "$0")" && pwd)"
+    payload_scripts="$(dirname "$TEMPLATE_DIR")/scripts"
     if [ -n "${AIB_COUNCIL_SCRIPT:-}" ] && [ -x "$AIB_COUNCIL_SCRIPT" ]; then
         council_script="$AIB_COUNCIL_SCRIPT"
     elif [ -x "./scripts/council.sh" ]; then
         council_script="./scripts/council.sh"
+    elif [ -x "${payload_scripts}/council.sh" ]; then
+        council_script="${payload_scripts}/council.sh"
     elif [ -x "${script_dir}/../scripts/council.sh" ]; then
         council_script="${script_dir}/../scripts/council.sh"
     elif [ -x "${script_dir}/../share/ai-barracks/scripts/council.sh" ]; then
