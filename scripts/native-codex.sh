@@ -55,6 +55,8 @@ cmd_hook_native_codex() (
                     -e "s/{{STARTED}}/$(date '+%Y-%m-%d %H:%M')/g" -e 's/{{TASK}}/(pending)/g' \
                     "$TEMPLATE_DIR/session-context.md" > "$ctx"
             elif ! $wrapped; then
+                # Resume reopens an ended file: release its seal only if unchanged.
+                _aib_seal_release "$sid"
                 _sed_inplace "$ctx" -e 's/^- \*\*Status\*\*: completed/- **Status**: active/' -e 's/^- \*\*Ended\*\*:.*/- **Ended**: (active)/'
             fi
             if ! grep -qF "| $sid |" SESSIONS.md; then
@@ -70,6 +72,7 @@ cmd_hook_native_codex() (
                 mv "$tmp" SESSIONS.md
                 _sed_inplace "$ctx" -e 's/^- \*\*Status\*\*: active/- **Status**: completed/' \
                     -e "s/^- \*\*Ended\*\*: (active)/- **Ended**: $(date '+%Y-%m-%d %H:%M')/"
+                _aib_seal_write "$sid" || true
             fi
             state=done ;;
         PermissionRequest) state=blocked ;;

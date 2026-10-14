@@ -384,6 +384,103 @@ _mark_interrupted() {
     return 0
 }
 
+# ============================================================
+# Session seals — change detection for ended (RECORD) session files
+# ============================================================
+# sessions/.seals/<id>.sha256 holds one `shasum -a 256` line "<hex>  sessions/<id>.md",
+# written when the session ends. A seal is never overwritten automatically, so an
+# unapproved change stays reported until the user runs `aib sessions seal <id>`.
+# Detection only — not a security boundary (replacing file AND seal goes unnoticed).
+AIB_SEAL_DIR="sessions/.seals"
+
+_aib_sha256() {
+    if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$@"; else sha256sum "$@"; fi
+}
+
+# Session ids become path segments: no separators, no leading dot.
+_aib_valid_sid() { [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
+
+# _aib_seal_expected <sid>: print the sealed hex. Returns 1 when there is no seal,
+# 2 when the seal is unreadable/malformed/symlinked (reported as invalid, never ignored).
+_aib_seal_expected() {
+    local sid="$1" seal="${AIB_SEAL_DIR}/${1}.sha256" content hex
+    [ -e "$seal" ] || [ -L "$seal" ] || return 1
+    { [ -L "$seal" ] || [ -L "$AIB_SEAL_DIR" ]; } && return 2
+    content="$(cat "$seal" 2>/dev/null)" || return 2
+    case "$content" in *$'\n'*) return 2 ;; esac
+    hex="${content%%  *}"
+    [[ "$hex" =~ ^[0-9a-f]{64}$ ]] && [ "${content#*  }" = "sessions/${sid}.md" ] || return 2
+    printf '%s\n' "$hex"
+}
+
+# _aib_seal_state <sid>: none | intact | modified | deleted | invalid
+_aib_seal_state() {
+    local sid="$1" md="sessions/${1}.md" hex rc=0 actual
+    hex="$(_aib_seal_expected "$sid")" || rc=$?
+    [ "$rc" -eq 1 ] && { echo none; return 0; }
+    [ "$rc" -ne 0 ] && { echo invalid; return 0; }
+    [ -L "$md" ] && { echo invalid; return 0; }
+    [ -f "$md" ] || { echo deleted; return 0; }
+    actual="$(_aib_sha256 "$md" 2>/dev/null | awk '{print $1}')"
+    if [ -z "$actual" ]; then echo invalid
+    elif [ "$actual" = "$hex" ]; then echo intact
+    else echo modified; fi
+}
+
+# _aib_seal_write <sid> [replace]: seal an ended session file. Without `replace` an
+# existing seal is kept (never overwritten automatically). No-op unless the file is a
+# regular non-symlink with Status completed.
+_aib_seal_write() {
+    local sid="$1" replace="${2:-}" md="sessions/${1}.md" seal="${AIB_SEAL_DIR}/${1}.sha256" tmp
+    _aib_valid_sid "$sid" || return 1
+    { [ -f "$md" ] && [ ! -L "$md" ]; } || return 1
+    grep -q '^- \*\*Status\*\*: completed' "$md" 2>/dev/null || return 1
+    [ ! -L "$AIB_SEAL_DIR" ] && [ ! -L "$seal" ] || return 1
+    if [ -e "$seal" ] && [ "$replace" != replace ]; then return 0; fi
+    mkdir -p "$AIB_SEAL_DIR" 2>/dev/null || return 1
+    tmp="$(mktemp "${seal}.XXXXXX" 2>/dev/null)" || return 1
+    if _aib_sha256 "$md" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+        mv "$tmp" "$seal" 2>/dev/null && return 0
+    fi
+    rm -f "$tmp"
+    return 1
+}
+
+# _aib_seal_release <sid>: a session is being reopened (resume). Drop its seal only when
+# the file still matches; a changed file keeps the old seal so the change stays reported.
+_aib_seal_release() {
+    [ "$(_aib_seal_state "$1")" = intact ] && rm -f "${AIB_SEAL_DIR}/${1}.sha256"
+    return 0
+}
+
+# _aib_seal_scan: print "<state> <sid>" for every seal that is not intact. Hashes all
+# sealed files in ONE process (shasum is perl-based; per-file calls would stall
+# SessionStart on barracks with many sessions).
+_aib_seal_scan() {
+    [ -d "$AIB_SEAL_DIR" ] && [ ! -L "$AIB_SEAL_DIR" ] || return 0
+    local seal sid md hex rc expected="" files=()
+    for seal in "$AIB_SEAL_DIR"/*.sha256; do
+        [ -e "$seal" ] || [ -L "$seal" ] || continue
+        sid="$(basename "$seal" .sha256)"
+        _aib_valid_sid "$sid" || { echo "invalid ${sid}"; continue; }
+        rc=0; hex="$(_aib_seal_expected "$sid")" || rc=$?
+        [ "$rc" -ne 0 ] && { echo "invalid ${sid}"; continue; }
+        md="sessions/${sid}.md"
+        [ -L "$md" ] && { echo "invalid ${sid}"; continue; }
+        [ -f "$md" ] || { echo "deleted ${sid}"; continue; }
+        expected="${expected}${hex} ${md}"$'\n'
+        files+=("$md")
+    done
+    [ ${#files[@]} -gt 0 ] || return 0
+    awk '
+        NR == FNR { if (NF == 2) want[$2] = $1; next }
+        ($2 in want) { seen[$2] = 1; if ($1 != want[$2]) report("modified", $2) }
+        END { for (p in want) if (!(p in seen)) report("invalid", p) }
+        function report(state, path) { sub(/^sessions\//, "", path); sub(/\.md$/, "", path); print state " " path }
+    ' <(printf '%s' "$expected") <(_aib_sha256 "${files[@]}" 2>/dev/null)
+    return 0
+}
+
 # Pass A (변종 G) — GC liveness sidecars whose process is CONFIRMED dead (kill -0 / lstart
 # reuse guard), and mark the matching .md interrupted. Safe to run automatically: a dead
 # verdict is positive evidence, never a guess. Auto (cleanup_stale) + manual (sessions gc).
@@ -1269,6 +1366,20 @@ cmd_hook_start() {
         mv "$vfile" "${vfile}.delivered"
     done
 
+    # === Sealed session integrity: ended (RECORD) files must not change ===
+    # Recomputed every start (no state), so a change stays visible until the user
+    # approves it. The approval command is deliberately not shown to the LLM.
+    local seal_issues
+    seal_issues="$(_aib_seal_scan 2>/dev/null || true)"
+    if [ -n "$seal_issues" ]; then
+        local seal_count seal_list
+        seal_count=$(printf '%s\n' "$seal_issues" | wc -l | tr -d ' ')
+        seal_list=$(printf '%s\n' "$seal_issues" | head -5 | awk '{printf "%s%s (%s)", (NR > 1 ? ", " : ""), $2, $1}')
+        echo "[AIB INTEGRITY] ${seal_count} ended session file(s) differ from their seal: ${seal_list}"
+        echo "[AIB INTEGRITY] Do not edit or re-seal them yourself. Tell the user and ask them to run \`aib sessions verify\`."
+        echo ""
+    fi
+
     # === Blocker carry-over (v0.9.0, self-correction protocol) ===
     local latest_prev
     latest_prev=$(ls -t sessions/*.md 2>/dev/null | grep -v "${session_id}" | head -1 || true)
@@ -1482,6 +1593,9 @@ cmd_hook_end() {
                 echo "- Note: no raw capture available for LLM summarization"
             } >> "$ctx_file"
         fi
+
+        # Seal LAST, after every aib write above, so the seal covers the final content.
+        _aib_seal_write "$session_id" || true
     fi
 }
 
@@ -2286,12 +2400,19 @@ cmd_sessions_clean() {
         [ "$status_field" = "active" ] && continue
 
         if [ "$task_field" = "(pending)" ] && [ "$log_count" -eq 0 ]; then
-            local session_id
+            local session_id seal_state
             session_id=$(basename "$ctx_file" .md)
+            # A sealed file that changed after its seal is evidence — never delete it here.
+            seal_state="$(_aib_seal_state "$session_id")"
+            if [ "$seal_state" != none ] && [ "$seal_state" != intact ]; then
+                log_warn "Skipped ${session_id}: sealed file is ${seal_state} (see aib sessions verify)"
+                continue
+            fi
             if $dry_run; then
                 log_info "[dry-run] Would delete: ${ctx_file}"
             else
-                rm -f "$ctx_file" "sessions/${session_id}.violations" "sessions/${session_id}.violations.delivered"
+                rm -f "$ctx_file" "sessions/${session_id}.violations" "sessions/${session_id}.violations.delivered" \
+                    "${AIB_SEAL_DIR}/${session_id}.sha256"
                 log_ok "Deleted empty session: ${session_id}"
             fi
             count=$((count + 1))
@@ -2304,6 +2425,58 @@ cmd_sessions_clean() {
         log_info "Would clean ${count} empty session(s) — run without --dry-run to apply"
     else
         log_ok "Cleaned ${count} empty session(s)"
+    fi
+}
+
+# ============================================================
+# aib sessions verify [--quiet] — check ended session files against their seals
+# ============================================================
+# stdout: "<modified|deleted|invalid> <id>" per problem. Exit 0 = all intact,
+# 1 = modified/deleted, 2 = a seal could not be verified.
+cmd_sessions_verify() {
+    local quiet=false
+    case "${1:-}" in
+        "") ;;
+        --quiet) quiet=true ;;
+        *) log_err "Usage: aib sessions verify [--quiet]"; return 2 ;;
+    esac
+    local results
+    results="$(_aib_seal_scan)"
+    if [ -z "$results" ]; then
+        $quiet || log_ok "All sealed session files match their seals"
+        return 0
+    fi
+    $quiet || printf '%s\n' "$results"
+    if ! $quiet; then
+        echo "  modified = sealed content differs from the current file; deleted = sealed file is missing" >&2
+        echo "  Review: git diff -- sessions/<id>.md    Approve an intended change: aib sessions seal <id>" >&2
+    fi
+    printf '%s\n' "$results" | grep -q '^invalid ' && return 2
+    return 1
+}
+
+# ============================================================
+# aib sessions seal <id> — approve the current state of an ended session file
+# ============================================================
+# Re-seals the current content, or drops the seal when the file was deleted.
+cmd_sessions_seal() {
+    local sid="${1:-}"
+    _aib_valid_sid "$sid" || { log_err "Usage: aib sessions seal <session-id>"; return 1; }
+    local md="sessions/${sid}.md" seal="${AIB_SEAL_DIR}/${sid}.sha256"
+    if [ -L "$md" ] || [ -L "$seal" ] || [ -L "$AIB_SEAL_DIR" ]; then
+        log_err "Refusing to follow a symlink for ${sid}"; return 1
+    fi
+    if [ -f "$md" ]; then
+        if ! grep -q '^- \*\*Status\*\*: completed' "$md" 2>/dev/null; then
+            log_err "Only ended (Status: completed) sessions can be sealed: ${sid}"; return 1
+        fi
+        _aib_seal_write "$sid" replace || { log_err "Failed to seal ${md}"; return 1; }
+        log_ok "Sealed current content of ${md}"
+    elif [ -e "$seal" ]; then
+        rm -f "$seal"
+        log_ok "Approved deletion: removed seal for ${sid}"
+    else
+        log_err "No session file or seal for ${sid}"; return 1
     fi
 }
 
@@ -2456,7 +2629,9 @@ case "${1:-}" in
             clean) shift; cmd_sessions_clean "$@" ;;
             state) shift; cmd_session_state "$@" ;;
             gc)    shift; cmd_sessions_gc "$@" ;;
-            *)     log_err "Usage: aib sessions <clean|state|gc> [args]"; exit 1 ;;
+            verify) shift; cmd_sessions_verify "$@" ;;
+            seal)  shift; cmd_sessions_seal "$@" ;;
+            *)     log_err "Usage: aib sessions <clean|state|gc|verify|seal> [args]"; exit 1 ;;
         esac
         ;;
     wiki)
@@ -2490,6 +2665,8 @@ case "${1:-}" in
         echo "  status                         Show active sessions and wiki"
         echo "  sessions clean [--dry-run]     Remove empty (no task + no log) sessions"
         echo "  sessions gc [--dry-run]        Reap dead liveness sidecars + stuck-active session files"
+        echo "  sessions verify [--quiet]      Report ended session files changed after their seal"
+        echo "  sessions seal <id>             Approve an ended session file's current state (re-seal)"
         echo "  wiki lint [--fix]              Check wiki health and freshness"
         echo "  skills list [path]             List skills with name + description"
         echo "  skills doctor [path]           Validate SKILL.md frontmatter"
