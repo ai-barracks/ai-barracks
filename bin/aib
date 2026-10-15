@@ -400,31 +400,49 @@ _aib_sha256() {
 # Session ids become path segments: no separators, no leading dot.
 _aib_valid_sid() { [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
 
-# _aib_seal_expected <sid>: print the sealed hex. Returns 1 when there is no seal,
-# 2 when the seal is unreadable/malformed/symlinked (reported as invalid, never ignored).
+# _aib_seal_store: 0 = usable, 1 = absent (nothing sealed yet), 2 = present but not
+# trustworthy (symlink, not a directory, or not readable/searchable). Shared by single
+# checks and the scan so an unusable store is never mistaken for "no seal".
+_aib_seal_store() {
+    [ -e "$AIB_SEAL_DIR" ] || [ -L "$AIB_SEAL_DIR" ] || return 1
+    if [ -L "$AIB_SEAL_DIR" ] || [ ! -d "$AIB_SEAL_DIR" ] || [ ! -r "$AIB_SEAL_DIR" ] || [ ! -x "$AIB_SEAL_DIR" ]; then
+        return 2
+    fi
+    return 0
+}
+
+# _aib_seal_expected <sid>: set _AIB_SEAL_HEX to the sealed hex. Builtins only — no
+# subshell or external command — so scanning many seals fits the 3s native hook timeout.
+# Returns 1 when there is no seal, 2 when the store or seal is unusable, symlinked,
+# non-regular (a FIFO would block the read) or malformed: invalid, never ignored.
+_AIB_SEAL_HEX=""
 _aib_seal_expected() {
-    local sid="$1" seal="${AIB_SEAL_DIR}/${1}.sha256" content hex
+    local sid="$1" seal="${AIB_SEAL_DIR}/${1}.sha256" store=0 line="" extra="" hex
+    _AIB_SEAL_HEX=""
+    _aib_seal_store || store=$?
+    [ "$store" -eq 1 ] && return 1
+    [ "$store" -eq 2 ] && return 2
     [ -e "$seal" ] || [ -L "$seal" ] || return 1
-    { [ -L "$seal" ] || [ -L "$AIB_SEAL_DIR" ]; } && return 2
-    [ -f "$seal" ] || return 2          # FIFO/dir/device: never read (a FIFO would block)
-    content="$(cat "$seal" 2>/dev/null)" || return 2
-    case "$content" in *$'\n'*) return 2 ;; esac
-    hex="${content%%  *}"
-    [[ "$hex" =~ ^[0-9a-f]{64}$ ]] && [ "${content#*  }" = "sessions/${sid}.md" ] || return 2
-    printf '%s\n' "$hex"
+    [ ! -L "$seal" ] && [ -f "$seal" ] && [ -r "$seal" ] || return 2
+    { IFS= read -r line; IFS= read -r extra; } < "$seal" 2>/dev/null || true
+    [ -z "$extra" ] || return 2          # exactly one record
+    hex="${line%%  *}"
+    [[ "$hex" =~ ^[0-9a-f]{64}$ ]] && [ "${line#*  }" = "sessions/${sid}.md" ] || return 2
+    _AIB_SEAL_HEX="$hex"
+    return 0
 }
 
 # _aib_seal_state <sid>: none | intact | modified | deleted | invalid
 _aib_seal_state() {
-    local sid="$1" md="sessions/${1}.md" hex rc=0 actual
-    hex="$(_aib_seal_expected "$sid")" || rc=$?
+    local sid="$1" md="sessions/${1}.md" rc=0 actual
+    _aib_seal_expected "$sid" || rc=$?
     [ "$rc" -eq 1 ] && { echo none; return 0; }
     [ "$rc" -ne 0 ] && { echo invalid; return 0; }
     [ -L "$md" ] && { echo invalid; return 0; }
     [ -f "$md" ] || { echo deleted; return 0; }
     actual="$(_aib_sha256 "$md" 2>/dev/null | awk '{print $1}')"
     if [ -z "$actual" ]; then echo invalid
-    elif [ "$actual" = "$hex" ]; then echo intact
+    elif [ "$actual" = "$_AIB_SEAL_HEX" ]; then echo intact
     else echo modified; fi
 }
 
@@ -484,23 +502,22 @@ _aib_seal_report() {
 # sealed files in ONE process (shasum is perl-based; per-file calls would stall
 # SessionStart on barracks with many sessions).
 _aib_seal_scan() {
-    [ -e "$AIB_SEAL_DIR" ] || [ -L "$AIB_SEAL_DIR" ] || return 0
+    local store=0
+    _aib_seal_store || store=$?
+    [ "$store" -eq 1 ] && return 0
     # Storage that cannot be trusted or listed is reported, never treated as "no seals".
-    if [ -L "$AIB_SEAL_DIR" ] || [ ! -d "$AIB_SEAL_DIR" ] || [ ! -r "$AIB_SEAL_DIR" ] || [ ! -x "$AIB_SEAL_DIR" ]; then
-        echo "invalid .seals"
-        return 0
-    fi
-    local seal sid md hex rc expected="" files=()
+    [ "$store" -eq 2 ] && { echo "invalid .seals"; return 0; }
+    local seal sid md rc expected=() files=()
     for seal in "$AIB_SEAL_DIR"/*.sha256; do
         [ -e "$seal" ] || [ -L "$seal" ] || continue
-        sid="$(basename "$seal" .sha256)"
+        sid="${seal##*/}"; sid="${sid%.sha256}"
         _aib_valid_sid "$sid" || { echo "invalid ${sid}"; continue; }
-        rc=0; hex="$(_aib_seal_expected "$sid")" || rc=$?
+        rc=0; _aib_seal_expected "$sid" || rc=$?
         [ "$rc" -ne 0 ] && { echo "invalid ${sid}"; continue; }
         md="sessions/${sid}.md"
         [ -L "$md" ] && { echo "invalid ${sid}"; continue; }
         [ -f "$md" ] || { echo "deleted ${sid}"; continue; }
-        expected="${expected}${hex} ${md}"$'\n'
+        expected+=("${_AIB_SEAL_HEX} ${md}")
         files+=("$md")
     done
     [ ${#files[@]} -gt 0 ] || return 0
@@ -509,7 +526,7 @@ _aib_seal_scan() {
         ($2 in want) { seen[$2] = 1; if ($1 != want[$2]) report("modified", $2) }
         END { for (p in want) if (!(p in seen)) report("invalid", p) }
         function report(state, path) { sub(/^sessions\//, "", path); sub(/\.md$/, "", path); print state " " path }
-    ' <(printf '%s' "$expected") <(_aib_sha256 "${files[@]}" 2>/dev/null)
+    ' <(printf '%s\n' "${expected[@]}") <(_aib_sha256 "${files[@]}" 2>/dev/null)
     return 0
 }
 

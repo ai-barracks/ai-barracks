@@ -205,4 +205,29 @@ chmod 755 sessions/.seals
 grep -q '^- \*\*Status\*\*: active' "sessions/${LSID}.md" || fail "resume should still reactivate"
 pass "unreleasable seal does not abort native resume"
 
+# --- 14. Unsearchable seal store protects single-session checks too --------------
+native SessionStart thread-guard >/dev/null
+GSID="$(ls -t sessions/codex-native-*.md | head -1 | xargs basename | sed 's/\.md$//')"
+native SessionEnd thread-guard          # empty (pending, no log) but sealed
+[ -f "sessions/.seals/${GSID}.sha256" ] || fail "guard fixture not sealed"
+chmod 600 sessions/.seals               # no search permission: seal paths cannot be stat'ed
+state="$(_aib_seal_state "$GSID")"
+"$AIB_BIN" sessions clean >/dev/null 2>&1
+chmod 755 sessions/.seals
+[ "$state" = invalid ] || fail "unsearchable store must make single checks invalid, got $state"
+[ -f "sessions/${GSID}.md" ] || fail "clean deleted a sealed session it could not verify"
+pass "unsearchable .seals is invalid for single checks; clean keeps the file"
+
+# --- 15. Scan cost stays inside the native hook's 3s timeout ---------------------
+touch "$BULK/AGENTS.md"   # native hooks only act inside a barrack
+for i in $(seq 1 2500); do   # well-formed seals, so every file is really hashed
+    printf '%s  sessions/bulk-session-%s.md\n' "$zero" "$i" > "$BULK/sessions/.seals/bulk-session-${i}.sha256"
+done
+start_ts=$(date +%s)
+(cd "$BULK" && jq -n '{hook_event_name:"SessionStart",session_id:"thread-bulk"}' \
+    | AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook native codex >/dev/null 2>&1) || true
+elapsed=$(( $(date +%s) - start_ts ))
+[ "$elapsed" -lt 3 ] || fail "native SessionStart with 2500 seals took ${elapsed}s (hook timeout is 3s)"
+pass "native SessionStart scans 2500 seals within the 3s hook timeout (${elapsed}s)"
+
 echo "All session seal tests passed."
