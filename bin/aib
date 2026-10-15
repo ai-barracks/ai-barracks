@@ -406,6 +406,7 @@ _aib_seal_expected() {
     local sid="$1" seal="${AIB_SEAL_DIR}/${1}.sha256" content hex
     [ -e "$seal" ] || [ -L "$seal" ] || return 1
     { [ -L "$seal" ] || [ -L "$AIB_SEAL_DIR" ]; } && return 2
+    [ -f "$seal" ] || return 2          # FIFO/dir/device: never read (a FIFO would block)
     content="$(cat "$seal" 2>/dev/null)" || return 2
     case "$content" in *$'\n'*) return 2 ;; esac
     hex="${content%%  *}"
@@ -436,20 +437,46 @@ _aib_seal_write() {
     { [ -f "$md" ] && [ ! -L "$md" ]; } || return 1
     grep -q '^- \*\*Status\*\*: completed' "$md" 2>/dev/null || return 1
     [ ! -L "$AIB_SEAL_DIR" ] && [ ! -L "$seal" ] || return 1
-    if [ -e "$seal" ] && [ "$replace" != replace ]; then return 0; fi
+    if { [ -e "$seal" ] || [ -L "$seal" ]; } && [ "$replace" != replace ]; then return 0; fi
     mkdir -p "$AIB_SEAL_DIR" 2>/dev/null || return 1
     tmp="$(mktemp "${seal}.XXXXXX" 2>/dev/null)" || return 1
+    local rc=1
     if _aib_sha256 "$md" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
-        mv "$tmp" "$seal" 2>/dev/null && return 0
+        if [ "$replace" = replace ]; then
+            mv -f "$tmp" "$seal" 2>/dev/null && rc=0
+        else
+            # Atomic no-clobber publish: link(2) fails if a seal appeared meanwhile.
+            ln "$tmp" "$seal" 2>/dev/null && rc=0
+        fi
     fi
-    rm -f "$tmp"
-    return 1
+    rm -f "$tmp" 2>/dev/null
+    return "$rc"
 }
 
 # _aib_seal_release <sid>: a session is being reopened (resume). Drop its seal only when
 # the file still matches; a changed file keeps the old seal so the change stays reported.
+# Never fails: a seal that cannot be removed simply stays (and is reported later).
 _aib_seal_release() {
-    [ "$(_aib_seal_state "$1")" = intact ] && rm -f "${AIB_SEAL_DIR}/${1}.sha256"
+    if [ "$(_aib_seal_state "$1")" = intact ]; then
+        rm -f "${AIB_SEAL_DIR}/${1}.sha256" 2>/dev/null || log_warn "Could not release seal for ${1}"
+    fi
+    return 0
+}
+
+# _aib_seal_report: SessionStart context lines for changed sealed files (stdout → LLM).
+# The approval command is deliberately not shown to the LLM.
+_aib_seal_report() {
+    local issues
+    issues="$(_aib_seal_scan 2>/dev/null || true)"
+    [ -n "$issues" ] || return 0
+    # One awk pass consumes all input (a `head` here would SIGPIPE under pipefail).
+    printf '%s\n' "$issues" | awk '
+        NR <= 5 { list = list (NR > 1 ? ", " : "") $2 " (" $1 ")" }
+        END {
+            print "[AIB INTEGRITY] " NR " ended session file(s) differ from their seal: " list (NR > 5 ? ", ..." : "")
+            print "[AIB INTEGRITY] Do not edit or re-seal them yourself. Tell the user and ask them to run `aib sessions verify`."
+            print ""
+        }'
     return 0
 }
 
@@ -457,7 +484,12 @@ _aib_seal_release() {
 # sealed files in ONE process (shasum is perl-based; per-file calls would stall
 # SessionStart on barracks with many sessions).
 _aib_seal_scan() {
-    [ -d "$AIB_SEAL_DIR" ] && [ ! -L "$AIB_SEAL_DIR" ] || return 0
+    [ -e "$AIB_SEAL_DIR" ] || [ -L "$AIB_SEAL_DIR" ] || return 0
+    # Storage that cannot be trusted or listed is reported, never treated as "no seals".
+    if [ -L "$AIB_SEAL_DIR" ] || [ ! -d "$AIB_SEAL_DIR" ] || [ ! -r "$AIB_SEAL_DIR" ] || [ ! -x "$AIB_SEAL_DIR" ]; then
+        echo "invalid .seals"
+        return 0
+    fi
     local seal sid md hex rc expected="" files=()
     for seal in "$AIB_SEAL_DIR"/*.sha256; do
         [ -e "$seal" ] || [ -L "$seal" ] || continue
@@ -1367,18 +1399,8 @@ cmd_hook_start() {
     done
 
     # === Sealed session integrity: ended (RECORD) files must not change ===
-    # Recomputed every start (no state), so a change stays visible until the user
-    # approves it. The approval command is deliberately not shown to the LLM.
-    local seal_issues
-    seal_issues="$(_aib_seal_scan 2>/dev/null || true)"
-    if [ -n "$seal_issues" ]; then
-        local seal_count seal_list
-        seal_count=$(printf '%s\n' "$seal_issues" | wc -l | tr -d ' ')
-        seal_list=$(printf '%s\n' "$seal_issues" | head -5 | awk '{printf "%s%s (%s)", (NR > 1 ? ", " : ""), $2, $1}')
-        echo "[AIB INTEGRITY] ${seal_count} ended session file(s) differ from their seal: ${seal_list}"
-        echo "[AIB INTEGRITY] Do not edit or re-seal them yourself. Tell the user and ask them to run \`aib sessions verify\`."
-        echo ""
-    fi
+    # Recomputed every start (no state), so a change stays visible until the user approves it.
+    _aib_seal_report || true
 
     # === Blocker carry-over (v0.9.0, self-correction protocol) ===
     local latest_prev
@@ -1734,8 +1756,16 @@ cmd_start() {
     log_info "Context file: ${ctx_file}"
     log_info "Raw capture: ${raw_file}"
 
-    # Trap for cleanup + summarization
+    # Trap for cleanup + summarization.
+    # The EXIT trap runs after cmd_start has returned, when its locals are gone — under
+    # `set -u` that aborted the trap and the session was never marked completed. Hand
+    # the id over in a global and rebuild the paths inside the trap.
+    AIB_WRAPPER_CLEANUP_SID="$session_id"
     cleanup() {
+        local session_id="${AIB_WRAPPER_CLEANUP_SID:-}"
+        [ -n "$session_id" ] || return 0
+        local ctx_file="sessions/${session_id}.md" raw_file="sessions/${session_id}.raw"
+
         # 1. Unregister from SESSIONS.md
         if [ -f "SESSIONS.md" ]; then
             local tmp="SESSIONS.md.tmp"
@@ -1758,6 +1788,9 @@ cmd_start() {
             log_info "Summarizing session with LLM..."
             summarize_session "$session_id" "$ctx_file" "$raw_file"
         fi
+
+        # 4. Seal LAST, after every aib write above.
+        _aib_seal_write "$session_id" || true
 
         log_info "Session unregistered: ${session_id}"
     }
@@ -2451,7 +2484,8 @@ cmd_sessions_verify() {
         echo "  modified = sealed content differs from the current file; deleted = sealed file is missing" >&2
         echo "  Review: git diff -- sessions/<id>.md    Approve an intended change: aib sessions seal <id>" >&2
     fi
-    printf '%s\n' "$results" | grep -q '^invalid ' && return 2
+    # Pattern match instead of `printf | grep -q` (grep's early exit SIGPIPEs printf).
+    case $'\n'"$results" in *$'\n'"invalid "*) return 2 ;; esac
     return 1
 }
 

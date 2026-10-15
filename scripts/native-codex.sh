@@ -56,13 +56,14 @@ cmd_hook_native_codex() (
                     "$TEMPLATE_DIR/session-context.md" > "$ctx"
             elif ! $wrapped; then
                 # Resume reopens an ended file: release its seal only if unchanged.
-                _aib_seal_release "$sid"
+                _aib_seal_release "$sid" || true
                 _sed_inplace "$ctx" -e 's/^- \*\*Status\*\*: completed/- **Status**: active/' -e 's/^- \*\*Ended\*\*:.*/- **Ended**: (active)/'
             fi
             if ! grep -qF "| $sid |" SESSIONS.md; then
                 printf '| %s | Codex CLI | %s | %s | (starting) |\n' "$sid" "$(date '+%m-%d %H:%M')" "$(date '+%m-%d %H:%M')" >> SESSIONS.md
             fi
             printf '[AIB SESSION] Your session file: %s/%s\nUpdate Task, Log, Decisions and Blockers during meaningful work. Do not use shared sessions/.active for identity.\n' "$(pwd -P)" "$ctx"
+            _aib_seal_report || true
             state=working ;;
         SessionEnd)
             [ -f "$ctx" ] || exit 0

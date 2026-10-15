@@ -139,4 +139,70 @@ printf '\nnote\n' >> "sessions/${ESID}.md"   # still pending/no log, but changed
     || fail "clean should remove an intact empty session together with its seal"
 pass "clean skips changed sealed sessions and removes intact ones with their seal"
 
+# --- 9. `aib start` wrapper (Gemini/Codex without native hooks) seals on exit ----
+mkdir -p "${TMP}/stubs"
+printf '#!/bin/bash\nexit 0\n' > "${TMP}/stubs/gemini"
+printf '#!/bin/bash\nexit 0\n' > "${TMP}/stubs/claude"   # summarizer: empty output
+chmod +x "${TMP}/stubs/gemini" "${TMP}/stubs/claude"
+PATH="${TMP}/stubs:$PATH" "$AIB_BIN" start gemini "wrapper task" </dev/null >/dev/null 2>&1
+WSID="$(ls -t sessions/gemini-*.md 2>/dev/null | head -1 | xargs basename 2>/dev/null | sed 's/\.md$//')"
+[ -n "$WSID" ] || fail "wrapper did not create a gemini session"
+grep -q '^- \*\*Status\*\*: completed' "sessions/${WSID}.md" || fail "wrapper did not complete the session"
+[ -f "sessions/.seals/${WSID}.sha256" ] && [ "$(_aib_seal_state "$WSID")" = intact ] \
+    || fail "aib start wrapper must seal the ended session"
+pass "aib start wrapper seals the session it ends"
+
+# --- 10. Native Codex SessionStart also reports changed sealed files ------------
+printf -- '- [14:00] tampered\n' >> "$MD"
+nat_out="$(jq -n '{hook_event_name:"SessionStart",session_id:"thread-report"}' \
+    | AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook native codex 2>/dev/null)"
+echo "$nat_out" | grep -q "\[AIB INTEGRITY\].*${SID}" || fail "native SessionStart missing integrity report: $nat_out"
+native SessionEnd thread-report
+"$AIB_BIN" sessions seal "$SID" >/dev/null 2>&1 || fail "re-approve after native report"
+pass "native Codex SessionStart injects the integrity report"
+
+# --- 11. Many issues: no SIGPIPE abort under pipefail, exit codes hold -----------
+BULK="${TMP}/bulk"; mkdir -p "$BULK/sessions/.seals"
+cp "$TEMPLATE_DIR/SESSIONS.md" "$BULK/SESSIONS.md"
+zero="$(printf '0%.0s' $(seq 1 64))"
+for i in $(seq 1 2500); do
+    printf -- '- **Status**: completed\n%s\n' "$i" > "$BULK/sessions/bulk-session-${i}.md"
+    printf '%s  sessions/bulk-session-%s.md\n' "$zero" "$i" > "$BULK/sessions/.seals/bulk-session-${i}.sha256"
+done
+bulk_out="$(cd "$BULK" && AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook start claude 2>/dev/null)"; rc=$?
+[ "$rc" = 0 ] || fail "hook start aborted with many issues (rc=$rc)"
+echo "$bulk_out" | grep -q "\[AIB INTEGRITY\] 2500 ended session file" || fail "bulk integrity line missing"
+for i in $(seq 1 2500); do echo garbage > "$BULK/sessions/.seals/bulk-session-${i}.sha256"; done
+(cd "$BULK" && "$AIB_BIN" sessions verify --quiet >/dev/null 2>&1); rc=$?
+[ "$rc" = 2 ] || fail "verify --quiet with many invalid seals must exit 2, got $rc"
+pass "thousands of issues: hook start completes and verify keeps exit 2"
+
+# --- 12. Unusable seal storage is invalid, never silently clean ------------------
+ODD="${TMP}/odd"; mkdir -p "$ODD/sessions" "${TMP}/elsewhere"
+ln -s "${TMP}/elsewhere" "$ODD/sessions/.seals"
+(cd "$ODD" && "$AIB_BIN" sessions verify >/dev/null 2>&1); rc=$?
+[ "$rc" = 2 ] || fail "symlinked .seals dir must be invalid (exit 2), got $rc"
+rm "$ODD/sessions/.seals"; mkdir -p "$ODD/sessions/.seals"
+printf -- '- **Status**: completed\n' > "$ODD/sessions/fifo-1.md"
+mkfifo "$ODD/sessions/.seals/fifo-1.sha256"
+(cd "$ODD" && "$AIB_BIN" sessions verify > "${TMP}/fifo.out" 2>/dev/null) & vpid=$!
+for _ in $(seq 1 50); do kill -0 "$vpid" 2>/dev/null || break; sleep 0.1; done
+if kill -0 "$vpid" 2>/dev/null; then kill "$vpid"; fail "verify hung on a FIFO seal"; fi
+wait "$vpid"; rc=$?
+[ "$rc" = 2 ] && grep -q '^invalid fifo-1$' "${TMP}/fifo.out" || fail "FIFO seal must be invalid (rc=$rc)"
+pass "symlinked seal dir and non-regular seal files are invalid without hanging"
+
+# --- 13. A seal that cannot be released never aborts native SessionStart ---------
+native SessionStart thread-locked >/dev/null
+LSID="$(ls -t sessions/codex-native-*.md | head -1 | xargs basename | sed 's/\.md$//')"
+native SessionEnd thread-locked
+[ -f "sessions/.seals/${LSID}.sha256" ] || fail "locked fixture not sealed"
+chmod 555 sessions/.seals
+jq -n '{hook_event_name:"SessionStart",session_id:"thread-locked"}' \
+    | AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook native codex >/dev/null 2>&1; rc=$?
+chmod 755 sessions/.seals
+[ "$rc" = 0 ] || fail "native SessionStart aborted when the seal could not be released (rc=$rc)"
+grep -q '^- \*\*Status\*\*: active' "sessions/${LSID}.md" || fail "resume should still reactivate"
+pass "unreleasable seal does not abort native resume"
+
 echo "All session seal tests passed."

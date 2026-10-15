@@ -11,6 +11,7 @@
 
 ### Fixed
 - `aib council` now finds `council.sh` beside the installed templates (`$(dirname TEMPLATE_DIR)/scripts`), so the versioned manual install (`~/.local/share/ai-barracks/<version>/`) no longer fails with "council.sh not found".
+- `aib start gemini|codex` (wrapper) now marks its session completed on exit. The EXIT trap read `cmd_start` locals after the function had returned, so under `set -u` it aborted with "session_id: unbound variable" and left the session active.
 
 ## Documentation follow-up - 2026-10-01
 
