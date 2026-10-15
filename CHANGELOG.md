@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Session seals: SessionEnd (Claude hook, `aib start` wrapper, Codex native) writes `sessions/.seals/<id>.sha256` after its last write. SessionStart reports ended session files whose content changed, went missing, or whose seal cannot be verified (`[AIB INTEGRITY]`), and tells the agent to report rather than edit or approve.
+- `aib sessions verify [--quiet]` (exit 0 intact / 1 modified or deleted / 2 unverifiable) and `aib sessions seal <id>` (approve the current state or a deletion).
+
+### Changed
+- Seals are never overwritten automatically: Codex native resume releases a seal only when the file is unchanged, and `aib sessions clean` skips sealed files that differ from their seal.
+
+### Fixed
+- `aib council` now finds `council.sh` beside the installed templates (`$(dirname TEMPLATE_DIR)/scripts`), so the versioned manual install (`~/.local/share/ai-barracks/<version>/`) no longer fails with "council.sh not found".
+- `aib start gemini|codex` (wrapper) now marks its session completed on exit. The EXIT trap read `cmd_start` locals after the function had returned, so under `set -u` it aborted with "session_id: unbound variable" and left the session active.
+
 ## Documentation follow-up - 2026-10-01
 
 - Reconciled the README's Council usage description with per-call structured usage; missing usage remains unavailable.

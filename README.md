@@ -137,6 +137,7 @@ your-barrack/
 ├── SESSIONS.md      ← 활성 세션 인덱스            [SYSTEM, gitignored]
 ├── sessions/
 │   ├── .active
+│   ├── .seals/      ← 종료 세션 봉인 (sha256)      [SYSTEM]
 │   └── claude-20260418-1430.md                   [RECORD, 영구 보존]
 ├── wiki/
 │   ├── Index.md     ← 토픽 카탈로그 (~750 토큰)
@@ -193,6 +194,18 @@ your-barrack/
 4. LLM이 이전 실수를 알고 작업 시작 → 재발 방지
 
 OpenAI/Anthropic의 Harness Engineering 패턴 — *"LLM에게 규칙을 말하지 말고, 기계적으로 강제하라"* — 를 그대로 구현했습니다.
+
+### 종료 세션 봉인 (Seal)
+
+세션 파일은 `RECORD`(종료 후 수정 금지)입니다. 이 선언을 문장이 아니라 검사로 지키기 위해:
+
+1. **SessionEnd가 마지막 쓰기 뒤에 봉인** — `sessions/.seals/<id>.sha256`에 `shasum -a 256` 호환 한 줄(`<hex>  sessions/<id>.md`)을 기록합니다. 빈 세션(삭제 대상)은 봉인하지 않습니다.
+2. **SessionStart가 봉인된 파일을 전부 검사** — 내용이 달라졌거나(`modified`) 파일이 없거나(`deleted`) 봉인을 검증할 수 없으면(`invalid`) `[AIB INTEGRITY]`로 LLM에 알리고, *직접 수정·승인하지 말고 사용자에게 보고*하도록 지시합니다.
+3. **승인은 사용자가** — `aib sessions verify`로 확인하고, 의도한 변경이면 `aib sessions seal <id>`로 재봉인(삭제였다면 봉인 제거)합니다. 승인 전까지 경고는 매 세션 반복됩니다.
+
+봉인은 자동으로 덮어쓰지 않습니다. Codex native resume은 내용이 봉인과 같을 때만 봉인을 풀고, 다르면 기존 봉인을 남겨 재개·재종료로 미승인 변경이 묻히지 않게 합니다. `aib sessions clean`도 봉인과 다른 파일은 지우지 않습니다.
+
+> 변경 **감지** 장치이지 보안 경계가 아닙니다. 파일과 봉인을 함께 바꾸면 감지되지 않고, 누가 바꿨는지도 알 수 없습니다. SessionEnd hook이 강제 종료되면 그 세션은 봉인 없이 남습니다. 기존 세션은 소급 봉인하지 않습니다.
 
 ### Session Auto-Recording
 
@@ -354,7 +367,7 @@ Slack 메시지 → barracks.json에서 키워드 매칭
 | `INJECTED` | `aib sync`가 마커 내부만 교체 | 마커 밖에만 내용 추가 |
 | `AUTO-GROW` | 에이전트가 세션마다 성장시킴 | 수정 가능 (안 해도 됨) |
 | `SYSTEM` | Hook/CLI가 관리 | **수정 금지** |
-| `RECORD` | 세션 중 기록, 이후 영구 보존 | **수정 금지** |
+| `RECORD` | 세션 중 기록, 이후 영구 보존 (종료 시 봉인) | **수정 금지** — 변경 시 `aib sessions verify`가 보고 |
 
 ### 사용자가 커스터마이징하는 파일
 
@@ -377,6 +390,8 @@ Slack 메시지 → barracks.json에서 키워드 매칭
 | `aib wiki lint [--fix]` | wiki 건전성 검사 (`STALE`, `OVERSIZED`, `MISSING`, `DUPLICATE`) |
 | `aib sessions clean [--dry-run]` | 빈 세션 파일 정리 |
 | `aib sessions gc [--dry-run]` | 죽은 liveness sidecar + stuck-active 세션 파일 수거 (변종 B/G, v1.3.2) |
+| `aib sessions verify [--quiet]` | 봉인 이후 바뀐 종료 세션 파일 보고 (exit 0 정상 / 1 변경·삭제 / 2 검증 불가) |
+| `aib sessions seal <id>` | 종료 세션 파일의 현재 상태를 승인(재봉인), 삭제된 경우 봉인 제거 |
 | `aib barracks [list\|remove\|route\|refresh]` | 글로벌 배럭 관리 |
 | `aib sync [--dry-run] [path]` | 템플릿 업그레이드 (파일별 안전 전략) |
 | `aib council [-r N] [-m MODE] [--gemini] "topic"` | 멀티 LLM 합의 도출 |
