@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.5.0] - 2026-10-15
 
 ### Added
 - Session seals: SessionEnd (Claude hook, `aib start` wrapper, Codex native) writes `sessions/.seals/<id>.sha256` after its last write. SessionStart reports ended session files whose content changed, went missing, or whose seal cannot be verified (`[AIB INTEGRITY]`), and tells the agent to report rather than edit or approve.

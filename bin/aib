@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# aib — AI Barracks CLI v1.4.0
+# aib — AI Barracks CLI v1.5.0
 # Usage: aib <command> [args]
 #
 # Commands:
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-AIB_VERSION="1.4.0"
+AIB_VERSION="1.5.0"
 # Use BASH_SOURCE[0] so `source bin/aib` works from any cwd
 # (AIB_SOURCE_ONLY=1 source "$AIB_BIN" is used by tests after `cd`).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
