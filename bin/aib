@@ -218,75 +218,6 @@ unregister_barrack() {
     log_ok "Barrack unregistered: $path"
 }
 
-# --- Strip ANSI codes from raw capture ---
-strip_ansi() {
-    sed 's/\x1B\[[0-9;]*[a-zA-Z]//g; s/\x1B[()][AB012]//g; s/\r//g' "$1" | \
-        grep -v '^[[:space:]]*$' | head -500
-}
-
-# --- Summarize session using LLM ---
-summarize_session() {
-    local session_id="$1"
-    local ctx_file="$2"
-    local raw_file="$3"
-
-    # Strip ANSI and truncate
-    local clean_file="sessions/${session_id}.txt"
-    strip_ansi "$raw_file" > "$clean_file" 2>/dev/null || true
-
-    if [ ! -s "$clean_file" ]; then
-        rm -f "$clean_file" "$raw_file"
-        return 0
-    fi
-
-    # Use claude -p to summarize (cheap, fast)
-    local summary
-    summary=$(claude -p "다음은 AI CLI 세션의 원본 기록이다. 이 세션에서 수행된 작업을 정리하라.
-
-형식:
-## Log
-- [HH:MM] <사용자 요청 요약> → <수행 결과>
-(실제 시간을 추정하여 기록)
-
-## Decisions
-- 주요 결정 사항 (없으면 생략)
-
-## Wiki Extractions
-다음 기준으로 wiki/RULES에 남길 지식을 판단하라:
-- 아키텍처 결정, 배포 절차, 디버깅 패턴, 코드 구조 → wiki 토픽
-- 실수에서 학습한 규칙, 사용자 교정, 반복 지시 → RULES.md
-- Format: - {파일} — {추출 내용 한 줄}
-- 해당 없으면 분류별 사유 기술 (예: \"(없음 — wiki: 단순 파일 수정 / RULES: 교정 없음)\")
-
-원본 기록:
-$(head -300 "$clean_file")" --output-format text --model "${AIB_SUMMARY_MODEL:-sonnet}" 2>/dev/null || true)
-
-    if [ -n "$summary" ]; then
-        # Replace empty sections in session file with LLM summary
-        local tmp="${ctx_file}.tmp"
-        # Keep header, replace from ## Log onwards
-        sed -n '1,/^## Log/p' "$ctx_file" > "$tmp"
-        echo "$summary" | sed -n '/^## Log/,$ p' | tail -n +2 >> "$tmp" 2>/dev/null || true
-
-        # Append auto-summary
-        local log_count
-        log_count=$(grep -c "^- \[" "$tmp" 2>/dev/null || echo "0")
-        {
-            echo ""
-            echo "## Summary (auto-generated)"
-            echo "- Source: LLM summarization of raw session capture"
-            echo "- Log entries: ${log_count}"
-            echo "- Duration: $(grep '^\- \*\*Started\*\*:' "$ctx_file" | sed 's/.*: //') ~ $(date '+%Y-%m-%d %H:%M')"
-        } >> "$tmp"
-
-        mv "$tmp" "$ctx_file"
-        log_info "Session summarized: ${log_count} log entries extracted"
-    fi
-
-    # Cleanup raw files
-    rm -f "$raw_file" "$clean_file"
-}
-
 # --- Stale cleanup (>2h) ---
 cleanup_stale() {
     [ ! -f "SESSIONS.md" ] && return 0
@@ -1608,30 +1539,17 @@ cmd_hook_end() {
             log_warn "Session ${session_id}: violations recorded → ${vfile}"
         fi
 
-        # Summarize from transcript (Claude) or raw capture (Gemini/Codex)
-        local raw_file=""
-        if [ "$client" = "claude" ] && [ -n "${CLAUDE_TRANSCRIPT_PATH:-}" ] && [ -f "${CLAUDE_TRANSCRIPT_PATH}" ]; then
-            raw_file="${CLAUDE_TRANSCRIPT_PATH}"
-            log_info "Using Claude transcript: ${raw_file}"
-        elif [ -f "sessions/${session_id}.raw" ]; then
-            raw_file="sessions/${session_id}.raw"
-            log_info "Using raw capture: ${raw_file}"
-        fi
-
-        if [ -n "$raw_file" ] && [ -s "$raw_file" ]; then
-            summarize_session "$session_id" "$ctx_file" "$raw_file"
-        else
-            # No raw data — just append basic summary
-            local log_count
-            log_count=$(grep -c "^- \[" "$ctx_file" 2>/dev/null) || log_count=0
-            {
-                echo ""
-                echo "## Summary (auto-generated)"
-                echo "- Log entries: ${log_count}"
-                echo "- Duration: $(grep '^\- \*\*Started\*\*:' "$ctx_file" | sed 's/.*: //') ~ $(date '+%Y-%m-%d %H:%M')"
-                echo "- Note: no raw capture available for LLM summarization"
-            } >> "$ctx_file"
-        fi
+        # Deterministic summary only. Session end never calls an LLM and never rewrites
+        # agent-written sections: the old summarize_session replaced everything after
+        # "## Log" with model output and deleted its raw input (see tests/test_wrapper_summary.sh).
+        local log_count
+        log_count=$(grep -c "^- \[" "$ctx_file" 2>/dev/null) || log_count=0
+        {
+            echo ""
+            echo "## Summary (auto-generated)"
+            echo "- Log entries: ${log_count}"
+            echo "- Duration: $(grep '^\- \*\*Started\*\*:' "$ctx_file" | sed 's/.*: //') ~ $(date '+%Y-%m-%d %H:%M')"
+        } >> "$ctx_file"
 
         # Seal LAST, after every aib write above, so the seal covers the final content.
         _aib_seal_write "$session_id" || true
@@ -1800,11 +1718,9 @@ cmd_start() {
                 -e "s/^- \*\*Ended\*\*: (active)/- **Ended**: $(date '+%Y-%m-%d %H:%M')/" || true
         fi
 
-        # 3. Summarize raw capture with LLM
-        if [ -f "$raw_file" ] && [ -s "$raw_file" ]; then
-            log_info "Summarizing session with LLM..."
-            summarize_session "$session_id" "$ctx_file" "$raw_file"
-        fi
+        # 3. Keep the raw capture as evidence (gitignore it). No LLM summary at exit:
+        #    it rewrote agent-written sections and deleted this file.
+        [ -s "$raw_file" ] && log_info "Raw capture kept: ${raw_file}"
 
         # 4. Seal LAST, after every aib write above.
         _aib_seal_write "$session_id" || true
