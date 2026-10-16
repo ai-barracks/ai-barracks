@@ -35,7 +35,7 @@ printf '## Log\n- [00:00] FAKE-SUMMARY\n'
 SH
 chmod +x "$TMP/stubs/gemini" "$TMP/stubs/claude"
 
-PATH="$TMP/stubs:$PATH" "$AIB_BIN" start gemini "wrapper task" </dev/null >/dev/null 2>&1
+PATH="$TMP/stubs:$PATH" "$AIB_BIN" start gemini "wrapper task" </dev/null >/dev/null 2>&1 || fail "aib start exited non-zero"
 SID="$(ls sessions/gemini-*.md | head -1 | xargs basename | sed 's/\.md$//')"
 MD="sessions/${SID}.md"
 [ -n "$SID" ] || fail "no wrapper session created"
@@ -45,6 +45,37 @@ grep -q 'AGENT-DECISION kept' "$MD" || fail "agent-written Decisions were remove
 grep -q 'FAKE-SUMMARY' "$MD" && fail "model output was written into the session record"
 [ ! -e "$TMP/claude_invoked" ] || fail "session end must not call claude -p"
 [ -s "sessions/${SID}.raw" ] || fail "raw capture (the only raw evidence) was deleted"
+grep -q "only raw evidence" "sessions/${SID}.raw" || fail "raw capture lost the agent output"
+[ "$(stat -f %Lp "sessions/${SID}.raw" 2>/dev/null || stat -c %a "sessions/${SID}.raw")" = 600 ] || fail "raw capture must be private (0600)"
+grep -qx "sessions/\*.raw" .gitignore || fail "raw captures must be git-ignored"
 [ "$(_aib_seal_state "$SID")" = intact ] || fail "session should be sealed intact"
 pass "wrapper exit keeps agent records and raw capture, never calls an LLM"
+# --- Claude SessionEnd: a transcript path in the environment is never consumed ---
+HOLDER_PID=$$
+printf '{"type":"user"}\n' > "$TMP/transcript.jsonl"
+AIB_LIVE_PID=$HOLDER_PID "$AIB_BIN" hook start claude >/dev/null 2>&1
+CSID="$(cat sessions/.active)"; CMD="sessions/${CSID}.md"
+_sed_inplace "$CMD" -e 's/^- \*\*Task\*\*: (pending)/- **Task**: claude task/'
+printf -- '- [10:00] CLAUDE-LOG kept\n' >> "$CMD"
+rm -f "$TMP/claude_invoked"
+PATH="$TMP/stubs:$PATH" CLAUDE_TRANSCRIPT_PATH="$TMP/transcript.jsonl" AIB_LIVE_PID=$HOLDER_PID \
+    "$AIB_BIN" hook end claude >/dev/null 2>&1 || fail "hook end exited non-zero"
+[ -s "$TMP/transcript.jsonl" ] || fail "Claude transcript was deleted at session end"
+[ ! -e "$TMP/claude_invoked" ] || fail "Claude session end must not call claude -p"
+grep -q 'CLAUDE-LOG kept' "$CMD" || fail "Claude session Log was rewritten"
+grep -q '^## Summary (auto-generated)' "$CMD" || fail "deterministic summary missing"
+[ "$(_aib_seal_state "$CSID")" = intact ] || fail "Claude session should be sealed after the summary"
+pass "Claude session end keeps the transcript and records, writes only the deterministic summary"
+
+# --- A session with records but no Task/Log is kept, not deleted as empty ---
+AIB_LIVE_PID=$HOLDER_PID "$AIB_BIN" hook start claude >/dev/null 2>&1
+DSID="$(cat sessions/.active)"; DMD="sessions/${DSID}.md"
+awk '{print} /^## Decisions/{print "- ONLY-A-DECISION"}' "$DMD" > "$DMD.tmp" && mv "$DMD.tmp" "$DMD"
+AIB_LIVE_PID=$HOLDER_PID "$AIB_BIN" hook end claude >/dev/null 2>&1
+[ -f "$DMD" ] && grep -q 'ONLY-A-DECISION' "$DMD" || fail "session with a Decision was deleted as empty"
+AIB_LIVE_PID=$HOLDER_PID "$AIB_BIN" hook start claude >/dev/null 2>&1
+ESID="$(cat sessions/.active)"
+AIB_LIVE_PID=$HOLDER_PID "$AIB_BIN" hook end claude >/dev/null 2>&1
+[ ! -f "sessions/${ESID}.md" ] || fail "a truly empty session should still be deleted"
+pass "only truly empty sessions are deleted at session end"
 echo "All wrapper summary tests passed."

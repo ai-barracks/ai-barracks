@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# aib — AI Barracks CLI v1.5.0
+# aib — AI Barracks CLI v1.5.1
 # Usage: aib <command> [args]
 #
 # Commands:
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-AIB_VERSION="1.5.0"
+AIB_VERSION="1.5.1"
 # Use BASH_SOURCE[0] so `source bin/aib` works from any cwd
 # (AIB_SOURCE_ONLY=1 source "$AIB_BIN" is used by tests after `cd`).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -817,6 +817,8 @@ ensure_live_gitignore() {
     local gi=".gitignore"
     [ -f "$gi" ] || touch "$gi"
     grep -qx 'sessions/.live/' "$gi" 2>/dev/null || printf 'sessions/.live/\n' >> "$gi"
+    # Wrapper raw captures are full terminal transcripts (may hold secrets): never commit.
+    grep -qx 'sessions/\*.raw' "$gi" 2>/dev/null || printf 'sessions/*.raw\n' >> "$gi"
 }
 
 # ============================================================
@@ -1428,6 +1430,18 @@ cmd_hook_start() {
     fi
 }
 
+# _aib_session_has_records <file>: true if any record section has content (a bullet or
+# text line other than comments). Used so a session is never deleted as "empty" while
+# it holds Decisions, Blockers, Retries, Wiki Extractions or Identity Suggestions.
+_aib_session_has_records() {
+    awk '
+        /^## (Decisions|Blockers|Retries|Wiki Extractions|Identity Suggestions)[[:space:]]*$/ { inside = 1; next }
+        /^## / { inside = 0 }
+        inside && $0 !~ /^[[:space:]]*(<!--.*)?$/ { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$1" 2>/dev/null
+}
+
 # ============================================================
 # aib hook end <client> — Called by CLI SessionEnd hooks
 # ============================================================
@@ -1505,8 +1519,8 @@ cmd_hook_end() {
         local task_field
         task_field=$(grep "^\- \*\*Task\*\*:" "$ctx_file" | sed 's/.*: //' || true)
         if [ "$task_field" = "(pending)" ]; then
-            # Empty session (no task + no log) → auto-delete
-            if [ "$log_count" -eq 0 ]; then
+            # Empty session (no task, no log, no other records) → auto-delete
+            if [ "$log_count" -eq 0 ] && ! _aib_session_has_records "$ctx_file"; then
                 rm -f "$ctx_file" "sessions/${session_id}.violations"
                 log_info "Empty session deleted: ${session_id} (no task, no log)"
                 return
@@ -1686,6 +1700,8 @@ cmd_start() {
     render_session_context "$session_id" "$cname" "$started" "$task_desc" > "$ctx_file"
 
     local raw_file="sessions/${session_id}.raw"
+    ensure_live_gitignore || true
+    ( umask 077; : > "$raw_file" ) 2>/dev/null || true   # script(1) keeps this 0600 mode
 
     log_info "Session registered: ${session_id} — ${task_desc}"
     log_info "Context file: ${ctx_file}"
