@@ -167,7 +167,7 @@ your-barrack/
   ├─ Stale 세션 정리 (>2h)                            ├─ SESSIONS.md 항목 삭제
   ├─ 새 세션 등록                                     ├─ Status → completed
   ├─ sessions/{id}.md 생성                            ├─ Ended 타임스탬프
-  ├─ 배럭 메타데이터 갱신                             ├─ Raw 캡처 → LLM 자동 요약
+  ├─ 배럭 메타데이터 갱신                             ├─ Claude 전사본 보관 (detached)
   ├─ 이전 blocker carry-over                         ├─ 불변식 검증
   ├─ .violations 주입 (remediation) ★                 │   • TASK_PENDING?
   └─ stdout → LLM 컨텍스트 주입                       │   • GROWTH_MISSING?
@@ -207,17 +207,32 @@ OpenAI/Anthropic의 Harness Engineering 패턴 — *"LLM에게 규칙을 말하�
 
 > 변경 **감지** 장치이지 보안 경계가 아닙니다. 파일과 봉인을 함께 바꾸면 감지되지 않고, 누가 바꿨는지도 알 수 없습니다. SessionEnd hook이 강제 종료되면 그 세션은 봉인 없이 남습니다. 기존 세션은 소급 봉인하지 않습니다.
 
-### Session Auto-Recording
+### Session Recording & Transcript Archive
 
-세션 내용을 LLM의 instruction-following에 의존하지 않고 **자동으로 캡처 + 요약**합니다:
+세션의 **정본은 에이전트가 작업 중에 쓰는 `sessions/{id}.md`**(Task/Log/Decisions/Retries/Wiki Extractions)입니다. 그 뒤에 있는 **원문 대화**는 CLI마다 따로 남습니다:
 
-| CLI | 캡처 방식 | 요약 시점 |
-|-----|---------|---------|
-| Claude Code | `$CLAUDE_TRANSCRIPT_PATH` (내장) | SessionEnd hook |
-| Gemini CLI | `script -q` (raw 캡처) | `aib start` trap |
-| Codex CLI | `script -q` (raw 캡처) | `aib start` trap |
+| CLI | 원문 | aib의 처리 |
+|-----|------|-----------|
+| Claude Code | `~/.claude/projects/<slug>/<uuid>.jsonl` — Claude Code가 `cleanupPeriodDays`(기본 약 30일) 뒤 삭제 | **v1.6.0+: `~/.aib/archive`에 검증된 gzip으로 보관** + 메타데이터 digest |
+| Gemini / Codex (`aib start`) | `script -q` 캡처 `sessions/{id}.raw` (0600, gitignore) | 그대로 보존 |
+| Codex native hooks | Codex 자체 저장소 | 아직 연결 안 됨 |
 
-세션 종료 시 `claude -p`로 raw 로그를 자동 요약하여 `sessions/{id}.md`에 구조화된 Log/Decisions/Wiki Extractions로 저장합니다.
+**Claude 전사본 보관 (v1.6.0)**
+- SessionStart/SessionEnd hook이 stdin의 `transcript_path`를 읽어 **의도만 기록**합니다(SessionEnd hook은 약 0.9초 뒤 종료되므로). 분리된 worker가 uuid별 잠금 안에서 복사 → sha256 → gzip → 압축 해제 sha 재검증 후 `~/.aib/archive/claude/<uuid>.jsonl.gz`(디렉터리 0700, 파일 0600, **git 밖**)에 둡니다.
+- resume으로 전사본이 **뒤에 덧붙은** 경우에만 같은 파일을 교체하고, 앞부분이 바뀐 사본은 `<uuid>.<sha12>.jsonl.gz`로 **따로 보관**합니다(덮어쓰기 없음).
+- 상태(`pending/succeeded/failed/source_missing`, 마지막 오류)는 전역에 남고, 어느 배럭의 SessionStart든 밀린 작업을 다시 시도합니다.
+- digest(`~/.aib/archive/.digest/<uuid>.json`)는 **메타데이터만**: 시간 범위, 모델, 프롬프트·턴 수, 도구별 호출/오류 수(MCP 서버명은 `mcp`로 마스킹), `message.id` 중복 제거한 토큰 합계, sidechain·파싱 실패 수. 프롬프트·경로·명령·도구 출력은 넣지 않습니다.
+- 세션 파일은 건드리지 않습니다(봉인과 충돌 없음).
+
+```bash
+aib archive backfill [--all]     # 지금 디스크에 남은 전사본 구출 (기본: 현재 배럭, --all: 모든 프로젝트)
+aib archive status               # succeeded/pending/failed/source_missing 개수, 용량, 가장 오래된 보관본
+aib archive show <uuid|sid>      # 한 세션의 보관 상태 + digest
+aib archive prune --older-than N # N일 지난 보관본 삭제 (기록 남김). 기본 보존은 무기한
+```
+
+> 보관본은 **평문**이고 비밀정보가 들어 있을 수 있습니다. Time Machine/클라우드 백업에도 그대로 실립니다. `cleanupPeriodDays`를 늘리면 Claude Code의 삭제를 늦출 수 있지만 백업을 대신하지 않습니다.
+> **자동 요약(LLM)은 아직 없습니다.** 이전 버전의 세션 종료 요약은 한 번도 동작하지 않았고, 동작했다면 기록을 덮어쓰고 원문을 지웠을 구현이라 v1.5.1에서 제거했습니다. 원문이 보관되므로 요약은 이후 별도 파일로 소급 생성할 수 있습니다.
 
 ### Agent Liveness (세션 생사 인지)
 
@@ -392,6 +407,7 @@ Slack 메시지 → barracks.json에서 키워드 매칭
 | `aib sessions gc [--dry-run]` | 죽은 liveness sidecar + stuck-active 세션 파일 수거 (변종 B/G, v1.3.2) |
 | `aib sessions verify [--quiet]` | 봉인 이후 바뀐 종료 세션 파일 보고 (exit 0 정상 / 1 변경·삭제 / 2 검증 불가) |
 | `aib sessions seal <id>` | 종료 세션 파일의 현재 상태를 승인(재봉인), 삭제된 경우 봉인 제거 |
+| `aib archive backfill\|status\|show\|prune` | Claude 전사본 보관 관리 (v1.6.0) — 구출, 상태, digest 조회, 기한 삭제 |
 | `aib barracks [list\|remove\|route\|refresh]` | 글로벌 배럭 관리 |
 | `aib sync [--dry-run] [path]` | 템플릿 업그레이드 (파일별 안전 전략) |
 | `aib council [-r N] [-m MODE] [--gemini] "topic"` | 멀티 LLM 합의 도출 |

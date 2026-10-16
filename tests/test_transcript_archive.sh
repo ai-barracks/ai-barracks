@@ -86,29 +86,36 @@ VAR="$AIB_ARCHIVE_DIR/claude/$UUID.$(src_sha "$SRC" | cut -c1-12).jsonl.gz"
 [ -f "$VAR" ] && [ "$(gz_sha "$VAR")" = "$(src_sha "$SRC")" ] || fail "divergent copy not stored as a variant"
 pass "divergent rewrite is kept as a separate variant, nothing overwritten"
 
-# --- 5. Path validation: outside the projects dir or name mismatch is refused -------------
-mkdir -p "$TMP/elsewhere"; cp "$SRC" "$TMP/elsewhere/22222222-2222-3333-4444-555555555555.jsonl"
-payload 22222222-2222-3333-4444-555555555555 "$TMP/elsewhere/22222222-2222-3333-4444-555555555555.jsonl" SessionEnd \
-    | AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook end claude >/dev/null 2>&1
-[ ! -e "$AIB_ARCHIVE_DIR/.state/22222222-2222-3333-4444-555555555555" ] || fail "path outside projects accepted"
-cp "$SRC" "$PROJ/33333333-2222-3333-4444-555555555555.jsonl"
-payload 44444444-2222-3333-4444-555555555555 "$PROJ/33333333-2222-3333-4444-555555555555.jsonl" SessionEnd \
-    | AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook end claude >/dev/null 2>&1
-[ ! -e "$AIB_ARCHIVE_DIR/.state/44444444-2222-3333-4444-555555555555" ] || fail "uuid/file name mismatch accepted"
-ln -s "$SRC" "$PROJ/55555555-2222-3333-4444-555555555555.jsonl"
-payload 55555555-2222-3333-4444-555555555555 "$PROJ/55555555-2222-3333-4444-555555555555.jsonl" SessionEnd \
-    | AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook end claude >/dev/null 2>&1
-[ ! -e "$AIB_ARCHIVE_DIR/claude/55555555-2222-3333-4444-555555555555.jsonl.gz" ] || fail "symlinked transcript archived"
-pass "transcripts outside the projects dir, mismatched names and symlinks are refused"
+# --- 5. Path validation (through the hook entry point, with a positive control) --------
+hook_end_direct() {  # hook_end_direct <uuid> <path>: run the SessionEnd archive hook in-process
+    _ARCH_PAYLOAD="$(payload "$1" "$2" SessionEnd)"; _ARCH_END_DONE=""
+    _arch_hook SessionEnd "" >/dev/null 2>&1
+}
+UOK="12121212-2222-3333-4444-555555555555"; cp "$SRC" "$PROJ/$UOK.jsonl"
+hook_end_direct "$UOK" "$PROJ/$UOK.jsonl"
+[ -f "$AIB_ARCHIVE_DIR/claude/$UOK.jsonl.gz" ] || fail "positive control: valid transcript not archived"
+mkdir -p "$TMP/elsewhere"; U5A="22222222-2222-3333-4444-555555555555"; cp "$SRC" "$TMP/elsewhere/$U5A.jsonl"
+hook_end_direct "$U5A" "$TMP/elsewhere/$U5A.jsonl"
+U5B="44444444-2222-3333-4444-555555555555"; cp "$SRC" "$PROJ/33333333-2222-3333-4444-555555555555.jsonl"
+hook_end_direct "$U5B" "$PROJ/33333333-2222-3333-4444-555555555555.jsonl"
+U5C="55555555-2222-3333-4444-555555555555"; ln -s "$SRC" "$PROJ/$U5C.jsonl"
+hook_end_direct "$U5C" "$PROJ/$U5C.jsonl"
+U5D="56565656-2222-3333-4444-555555555555"; mkdir -p "$PROJ/nested"; cp "$SRC" "$PROJ/nested/$U5D.jsonl"
+hook_end_direct "$U5D" "$PROJ/nested/$U5D.jsonl"
+for u in "$U5A" "$U5B" "$U5C" "$U5D"; do
+    [ ! -e "$AIB_ARCHIVE_DIR/.state/$u" ] && ! ls "$AIB_ARCHIVE_DIR/.intent/$u."* >/dev/null 2>&1 \
+        && [ ! -e "$AIB_ARCHIVE_DIR/claude/$u.jsonl.gz" ] || fail "invalid transcript accepted: $u"
+done
+pass "outside paths, name mismatches, symlinks and nested dirs are refused; a valid path is archived"
 
 # --- 6. Busy lock skips; a dead worker's lock is reclaimed -------------------------------
 U6="66666666-2222-3333-4444-555555555555"; printf '{"type":"user","cwd":"%s"}\n' "$BR_REAL" > "$PROJ/$U6.jsonl"
 "$AIB_BIN" archive backfill >/dev/null 2>&1   # registers + archives
-mkdir -p "$AIB_ARCHIVE_DIR/.lock/$U6"; echo "$HOLDER" > "$AIB_ARCHIVE_DIR/.lock/$U6/pid"
+mkdir -p "$AIB_ARCHIVE_DIR/.lock/$U6"; echo "$HOLDER.live" > "$AIB_ARCHIVE_DIR/.lock/$U6/owner"
 printf '{"type":"user","timestamp":"x"}\n' >> "$PROJ/$U6.jsonl"
 "$AIB_BIN" archive run "$U6" >/dev/null 2>&1
 [ "$(gz_sha "$AIB_ARCHIVE_DIR/claude/$U6.jsonl.gz")" != "$(src_sha "$PROJ/$U6.jsonl")" ] || fail "a live lock holder must not be bypassed"
-echo 999999 > "$AIB_ARCHIVE_DIR/.lock/$U6/pid"
+echo "999999.dead" > "$AIB_ARCHIVE_DIR/.lock/$U6/owner"
 "$AIB_BIN" archive run "$U6" >/dev/null 2>&1
 [ "$(gz_sha "$AIB_ARCHIVE_DIR/claude/$U6.jsonl.gz")" = "$(src_sha "$PROJ/$U6.jsonl")" ] || fail "dead worker lock not reclaimed"
 [ ! -e "$AIB_ARCHIVE_DIR/.lock/$U6" ] || fail "lock left behind"
@@ -152,13 +159,76 @@ pass "show resolves session ids; prune is explicit, logged and age-bounded"
 U10="10101010-2222-3333-4444-555555555555"; printf '{"type":"user","cwd":"%s"}\n' "$BR_REAL" > "$PROJ/$U10.jsonl"
 payload "$U10" "$PROJ/$U10.jsonl" SessionStart | AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook start claude >/dev/null 2>&1
 S10="$(cat sessions/.active)"
-chmod 500 "$AIB_ARCHIVE_DIR/.state"
+chmod 500 "$AIB_ARCHIVE_DIR/.intent" "$AIB_ARCHIVE_DIR/.state"
 t0=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
 payload "$U10" "$PROJ/$U10.jsonl" SessionEnd | AIB_ARCHIVE_SYNC=0 AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook end claude >/dev/null 2>&1; rc=$?
 t1=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
-chmod 700 "$AIB_ARCHIVE_DIR/.state"
+chmod 700 "$AIB_ARCHIVE_DIR/.intent" "$AIB_ARCHIVE_DIR/.state"
 [ "$rc" = 0 ] || fail "hook end must not fail when the archive is unwritable"
 awk -v a="$t0" -v b="$t1" 'BEGIN { exit (b - a < 0.6) ? 0 : 1 }' || fail "hook end too slow for the ~0.9s SessionEnd budget ($t0 → $t1)"
 pass "hook end stays under the SessionEnd budget and never fails on archive errors"
 
+# --- 11. Real detached worker: the hook returns, the worker finishes afterwards ------------
+U11="11111111-aaaa-3333-4444-555555555555"; cp "$SRC" "$PROJ/$U11.jsonl"
+payload "$U11" "$PROJ/$U11.jsonl" SessionEnd | AIB_ARCHIVE_SYNC=0 AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook end claude >/dev/null 2>&1
+for _ in $(seq 1 50); do [ "$(state_of "$U11" state)" = succeeded ] && break; sleep 0.2; done
+[ "$(state_of "$U11" state)" = succeeded ] && [ -f "$AIB_ARCHIVE_DIR/claude/$U11.jsonl.gz" ] \
+    || fail "detached worker did not archive after the hook returned (state=$(state_of "$U11" state))"
+pass "a detached worker archives after SessionEnd returns, even without a session row"
+
+# --- 12. Concurrent workers on one uuid leave one verified archive ------------------------
+printf '{"type":"user","timestamp":"2026-10-16T03:00:00Z","message":{"content":"more"}}\n' >> "$PROJ/$U11.jsonl"
+pids=""; for _ in 1 2 3 4 5; do "$AIB_BIN" archive run "$U11" >/dev/null 2>&1 & pids="$pids $!"; done
+for p in $pids; do wait "$p"; done   # not a bare wait: HOLDER is a background job too
+"$AIB_BIN" archive run "$U11" >/dev/null 2>&1
+[ "$(gz_sha "$AIB_ARCHIVE_DIR/claude/$U11.jsonl.gz")" = "$(src_sha "$PROJ/$U11.jsonl")" ] || fail "concurrent runs corrupted the archive"
+[ "$(ls "$AIB_ARCHIVE_DIR/claude" | grep -c "^$U11")" = 1 ] || fail "concurrent runs created variants"
+[ ! -e "$AIB_ARCHIVE_DIR/.lock/$U11" ] && ! ls "$AIB_ARCHIVE_DIR/claude/.tmp.$U11."* >/dev/null 2>&1 || fail "lock or tmp left behind"
+pass "concurrent workers converge on one verified archive"
+
+# --- 13. Same-length rewrite, deleted archive and failed digest are all repaired ----------
+U13="13131313-2222-3333-4444-555555555555"; printf '{"type":"user","cwd":"%s","message":{"content":"AAAA"}}\n' "$BR_REAL" > "$PROJ/$U13.jsonl"
+"$AIB_BIN" archive backfill >/dev/null 2>&1
+printf '{"type":"user","cwd":"%s","message":{"content":"BBBB"}}\n' "$BR_REAL" > "$PROJ/$U13.jsonl"
+"$AIB_BIN" archive run "$U13" >/dev/null 2>&1
+[ "$(ls "$AIB_ARCHIVE_DIR/claude" | grep -c "^$U13\.[0-9a-f]")" = 1 ] || fail "same-length rewrite not detected"
+rm -f "$AIB_ARCHIVE_DIR/claude/$U13.jsonl.gz"; _sed_inplace "$AIB_ARCHIVE_DIR/.state/$U13" -e 's/^archive=.*/archive='"$U13"'.jsonl.gz/'
+"$AIB_BIN" archive run "$U13" >/dev/null 2>&1
+ls "$AIB_ARCHIVE_DIR/claude/$U13"* >/dev/null 2>&1 && [ "$(state_of "$U13" state)" = succeeded ] || fail "deleted archive not restored"
+_sed_inplace "$AIB_ARCHIVE_DIR/.state/$U13" -e 's/^digest_state=.*/digest_state=failed/'
+rm -f "$AIB_ARCHIVE_DIR/.digest/$U13.json"
+"$AIB_BIN" archive run "$U13" >/dev/null 2>&1
+[ -f "$AIB_ARCHIVE_DIR/.digest/$U13.json" ] && [ "$(state_of "$U13" digest_state)" = ok ] || fail "failed digest not retried"
+pass "same-length rewrites, lost archives and failed digests are repaired on the next run"
+
+# --- 14. Digest copies only well-formed metadata ------------------------------------------
+U14="14141414-2222-3333-4444-555555555555"
+cat > "$PROJ/$U14.jsonl" <<JSON
+{"type":"user","cwd":"$BR_REAL","timestamp":{"prompt":"SECRET-TS"},"message":{"content":"hi"}}
+{"type":"assistant","timestamp":"2026-10-16T04:00:00Z","message":{"id":"x","model":"SECRET MODEL /etc/passwd","content":[{"type":"tool_use","name":"SECRET tool/../x"}],"usage":{"input_tokens":"lots"}}}
+JSON
+"$AIB_BIN" archive backfill >/dev/null 2>&1
+D14="$AIB_ARCHIVE_DIR/.digest/$U14.json"
+grep -q SECRET "$D14" && { cat "$D14"; fail "digest copied malformed values verbatim"; }
+jq -e '.models == ["other"] and .tool_calls.other == 1 and .first_ts == "2026-10-16T04:00:00Z" and .tokens.input == 0' "$D14" >/dev/null \
+    || { cat "$D14"; fail "digest sanitization"; }
+pass "digest keeps only well-formed timestamps and identifiers"
+
+# --- 15. status survives failures listed last; state rejects line breaks -------------------
+_arch_state_set "$U14" "cwd=$(printf 'a\nstate=pruned')" && fail "state accepted a line break"
+UF="15151515-2222-3333-4444-555555555555"; mkdir -p "$AIB_ARCHIVE_DIR/.state"
+printf 'state=failed\nlast_error=x\nattempts=5\n' > "$AIB_ARCHIVE_DIR/.state/$UF"
+"$AIB_BIN" archive status >/dev/null 2>&1 || fail "status must exit 0 with failed entries"
+pass "status exits 0 with failures; state values cannot carry line breaks"
+
+# --- 16. A writer that never closes stdin cannot stall SessionEnd --------------------------
+U16="16161616-2222-3333-4444-555555555555"; cp "$SRC" "$PROJ/$U16.jsonl"
+t0=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
+{ payload "$U16" "$PROJ/$U16.jsonl" SessionEnd; sleep 3; } | {
+    AIB_ARCHIVE_NO_WORKER=1 AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook end claude >/dev/null 2>&1
+    perl -MTime::HiRes=time -e 'printf "%.3f", time' > "$TMP/t16"; }
+t1="$(cat "$TMP/t16")"
+awk -v a="$t0" -v b="$t1" 'BEGIN { exit (b - a < 0.6) ? 0 : 1 }' || fail "open stdin stalled hook end ($t0 → $t1)"
+ls "$AIB_ARCHIVE_DIR/.intent/$U16."* >/dev/null 2>&1 || fail "payload from an open stdin was not used"
+pass "hook end reads a complete payload without waiting for EOF"
 echo "All transcript archive tests passed."
