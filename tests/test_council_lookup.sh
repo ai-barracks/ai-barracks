@@ -23,8 +23,8 @@ install_layout() {
     mkdir -p "$prefix/bin" "$share/templates" "$share/scripts"
     sed "s|^TEMPLATE_DIR=.*$|TEMPLATE_DIR=\"$share/templates\"|" "$ROOT/bin/aib" > "$prefix/bin/aib"
     chmod +x "$prefix/bin/aib"
-    cp "$ROOT/scripts/native-codex.sh" "$share/scripts/native-codex.sh"
-    printf '#!/usr/bin/env bash\necho "STUB_COUNCIL:$*"\n' > "$share/scripts/council.sh"
+    cp "$ROOT"/scripts/*.sh "$share/scripts/"   # real installs ship the whole scripts dir
+    printf '#!/usr/bin/env bash\necho "STUB_COUNCIL:$*"\n' > "$share/scripts/council.sh"   # after the copy: stub wins
     chmod +x "$share/scripts/council.sh"
 }
 
