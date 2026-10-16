@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.1] - 2026-10-16
+
+### Fixed
+- **Session end no longer rewrites or deletes session records.** `summarize_session` sent the raw capture to `claude -p` (hooks on, barrack cwd), replaced everything after `## Log` with the model output and then deleted its input. It was unreachable until 1.5.0 fixed the `aib start` wrapper's EXIT trap; from 1.5.0 every Gemini/Codex wrapper exit (CommandCenter launches agents through `aib start`) could overwrite agent-written Log/Decisions/Wiki Extractions. Removed: session end writes only the deterministic summary block, never calls an LLM, then seals.
+- The Claude path read `CLAUDE_TRANSCRIPT_PATH`, which Claude Code never sets (it passes `transcript_path` in the hook's stdin JSON), so it never ran; had it run, it would have deleted the Claude transcript. Removed with it.
+- A session with Decisions/Blockers/Retries/Wiki Extractions/Identity Suggestions but no Task/Log was deleted as "empty" at session end. Only truly empty sessions are deleted now.
+- Wrapper raw captures (`sessions/<id>.raw`) are kept as evidence, created `0600`, and `sessions/*.raw` is added to `.gitignore`.
+
 ## [1.5.0] - 2026-10-15
 
 ### Added
