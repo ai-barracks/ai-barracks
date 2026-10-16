@@ -23,6 +23,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 
 source "$(dirname "$TEMPLATE_DIR")/scripts/native-codex.sh"
+# Transcript archive is optional at load time: a partially updated install must never
+# break session hooks, so fall back to no-ops when the script is missing.
+_AIB_ARCHIVE_SH="$(dirname "$TEMPLATE_DIR")/scripts/transcript-archive.sh"
+if [ -f "$_AIB_ARCHIVE_SH" ]; then
+    source "$_AIB_ARCHIVE_SH"
+else
+    _arch_read_payload() { :; }
+    _arch_hook() { :; }
+    cmd_archive() { echo "transcript archive unavailable: ${_AIB_ARCHIVE_SH} missing (reinstall aib)" >&2; return 1; }
+fi
 
 # --- Colors (stderr only for hooks — stdout is for LLM context) ---
 RED='\033[0;31m'
@@ -1258,6 +1268,7 @@ check_skills_drift() {
 # ============================================================
 cmd_hook_start() {
     local client="${1:-unknown}"
+    [ "$client" = claude ] && _arch_read_payload
     local cname
     cname=$(client_name "$client")
     local session_id
@@ -1309,6 +1320,9 @@ cmd_hook_start() {
 
     # Write active session marker (LLM reads this via protocol in CLAUDE.md)
     echo "${session_id}" > "sessions/.active"
+
+    # Transcript archive: remember sid↔transcript and retry unfinished archives (detached).
+    [ "$client" = claude ] && { _arch_hook SessionStart "$session_id" || true; }
 
     # === LLM Context Injection (stdout → LLM) ===
     echo "[AIB SESSION] Your session file: sessions/${session_id}.md"
@@ -1447,6 +1461,7 @@ _aib_session_has_records() {
 # ============================================================
 cmd_hook_end() {
     local client="${1:-unknown}"
+    [ "$client" = claude ] && _arch_read_payload
 
     # AIB-002: resolve by PID first so the right concurrent same-client session
     # gets completed. Fall back to the last `${client}-...` row in SESSIONS.md
@@ -1468,6 +1483,10 @@ cmd_hook_end() {
         log_warn "No active session found for ${client}"
         return
     fi
+
+    # Transcript archive first: the worker is detached and never touches the session file,
+    # so even a session deleted below as empty keeps its raw conversation.
+    [ "$client" = claude ] && { _arch_hook SessionEnd "$session_id" || true; }
 
     # Remove from SESSIONS.md
     local tmp="SESSIONS.md.tmp"
@@ -2617,6 +2636,7 @@ case "${1:-}" in
             *)     log_err "Usage: aib sessions <clean|state|gc|verify|seal> [args]"; exit 1 ;;
         esac
         ;;
+    archive) shift; cmd_archive "$@" ;;
     wiki)
         shift
         case "${1:-}" in
@@ -2650,6 +2670,9 @@ case "${1:-}" in
         echo "  sessions gc [--dry-run]        Reap dead liveness sidecars + stuck-active session files"
         echo "  sessions verify [--quiet]      Report ended session files changed after their seal"
         echo "  sessions seal <id>             Approve an ended session file's current state (re-seal)"
+        echo "  archive backfill [--all]       Copy Claude transcripts still on disk into the private archive"
+        echo "  archive status|show <id>       Archive health (pending/failed/missing) or one transcript's digest"
+        echo "  archive prune --older-than N   Delete archived transcripts older than N days (logged)"
         echo "  wiki lint [--fix]              Check wiki health and freshness"
         echo "  skills list [path]             List skills with name + description"
         echo "  skills doctor [path]           Validate SKILL.md frontmatter"
