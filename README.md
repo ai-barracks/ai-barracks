@@ -228,6 +228,7 @@ OpenAI/Anthropic의 Harness Engineering 패턴 — *"LLM에게 규칙을 말하�
 aib archive backfill [--all]     # 지금 디스크에 남은 전사본 구출 (기본: 현재 배럭, --all: 모든 프로젝트)
 aib archive status               # succeeded/pending/failed/source_missing 개수, 용량, 가장 오래된 보관본
 aib archive show <uuid|sid>      # 한 세션의 보관 상태 + digest
+aib archive verify               # 모든 보관본의 gzip CRC + 원문 sha 전수 검증 (문제 시 exit 1)
 aib archive prune --older-than N # N일 지난 보관본 삭제 (기록 남김). 기본 보존은 무기한
 ```
 
@@ -407,7 +408,7 @@ Slack 메시지 → barracks.json에서 키워드 매칭
 | `aib sessions gc [--dry-run]` | 죽은 liveness sidecar + stuck-active 세션 파일 수거 (변종 B/G, v1.3.2) |
 | `aib sessions verify [--quiet]` | 봉인 이후 바뀐 종료 세션 파일 보고 (exit 0 정상 / 1 변경·삭제 / 2 검증 불가) |
 | `aib sessions seal <id>` | 종료 세션 파일의 현재 상태를 승인(재봉인), 삭제된 경우 봉인 제거 |
-| `aib archive backfill\|status\|show\|prune` | Claude 전사본 보관 관리 (v1.6.0) — 구출, 상태, digest 조회, 기한 삭제 |
+| `aib archive backfill\|status\|show\|verify\|prune` | Claude 전사본 보관 관리 (v1.6.0) — 구출, 상태, digest 조회, 기한 삭제 |
 | `aib barracks [list\|remove\|route\|refresh]` | 글로벌 배럭 관리 |
 | `aib sync [--dry-run] [path]` | 템플릿 업그레이드 (파일별 안전 전략) |
 | `aib council [-r N] [-m MODE] [--gemini] "topic"` | 멀티 LLM 합의 도출 |

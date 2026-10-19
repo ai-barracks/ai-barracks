@@ -111,15 +111,20 @@ pass "outside paths, name mismatches, symlinks and nested dirs are refused; a va
 # --- 6. Busy lock skips; a dead worker's lock is reclaimed -------------------------------
 U6="66666666-2222-3333-4444-555555555555"; printf '{"type":"user","cwd":"%s"}\n' "$BR_REAL" > "$PROJ/$U6.jsonl"
 "$AIB_BIN" archive backfill >/dev/null 2>&1   # registers + archives
-mkdir -p "$AIB_ARCHIVE_DIR/.lock/$U6"; echo "$HOLDER.live" > "$AIB_ARCHIVE_DIR/.lock/$U6/owner"
+mkdir -p "$AIB_ARCHIVE_DIR/.lock/$U6"; echo "$HOLDER|$(_arch_proc_start "$HOLDER")|live" > "$AIB_ARCHIVE_DIR/.lock/$U6/owner"
+touch -t 202001010000 "$AIB_ARCHIVE_DIR/.lock/$U6"   # an old lock of a live owner must still be respected
 printf '{"type":"user","timestamp":"x"}\n' >> "$PROJ/$U6.jsonl"
 "$AIB_BIN" archive run "$U6" >/dev/null 2>&1
 [ "$(gz_sha "$AIB_ARCHIVE_DIR/claude/$U6.jsonl.gz")" != "$(src_sha "$PROJ/$U6.jsonl")" ] || fail "a live lock holder must not be bypassed"
-echo "999999.dead" > "$AIB_ARCHIVE_DIR/.lock/$U6/owner"
+echo "999999||dead" > "$AIB_ARCHIVE_DIR/.lock/$U6/owner"
 "$AIB_BIN" archive run "$U6" >/dev/null 2>&1
 [ "$(gz_sha "$AIB_ARCHIVE_DIR/claude/$U6.jsonl.gz")" = "$(src_sha "$PROJ/$U6.jsonl")" ] || fail "dead worker lock not reclaimed"
 [ ! -e "$AIB_ARCHIVE_DIR/.lock/$U6" ] || fail "lock left behind"
-pass "a live lock is respected; a dead worker's lock is reclaimed"
+echo "$HOLDER|Mon Jan  1 00:00:00 2001|reused" > "$AIB_ARCHIVE_DIR/.lock/$U6/owner"   # pid reused by another process
+printf '{"type":"user","timestamp":"y"}\n' >> "$PROJ/$U6.jsonl"
+"$AIB_BIN" archive run "$U6" >/dev/null 2>&1
+[ "$(gz_sha "$AIB_ARCHIVE_DIR/claude/$U6.jsonl.gz")" = "$(src_sha "$PROJ/$U6.jsonl")" ] || fail "lock of a reused pid not reclaimed"
+pass "a live owner is never reclaimed by age; dead or reused-pid locks are reclaimed"
 
 # --- 7. Backfill: this barrack by default, --all for every project ------------------------
 OTHER="$CLAUDE_CONFIG_DIR/projects/-other-project"; mkdir -p "$OTHER"
@@ -155,18 +160,19 @@ grep -q "$U8" "$AIB_ARCHIVE_DIR/.pruned.log" || fail "prune must be logged"
 "$AIB_BIN" archive prune >/dev/null 2>&1 && fail "prune without --older-than must refuse"
 pass "show resolves session ids; prune is explicit, logged and age-bounded"
 
-# --- 10. Hook stays fast and never fails when the archive cannot be written ---------------
+# --- 10. Hook stays fast and never fails when the archive cannot be written -------------
 U10="10101010-2222-3333-4444-555555555555"; printf '{"type":"user","cwd":"%s"}\n' "$BR_REAL" > "$PROJ/$U10.jsonl"
-payload "$U10" "$PROJ/$U10.jsonl" SessionStart | AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook start claude >/dev/null 2>&1
-S10="$(cat sessions/.active)"
-chmod 500 "$AIB_ARCHIVE_DIR/.intent" "$AIB_ARCHIVE_DIR/.state"
+mkdir -p "$TMP/ro"; chmod 500 "$TMP/ro"
+payload "$U10" "$PROJ/$U10.jsonl" SessionStart | AIB_ARCHIVE_DIR="$TMP/ro/archive" AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook start claude >/dev/null 2>&1 \
+    || fail "hook start must not fail when the archive is unwritable"
 t0=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
-payload "$U10" "$PROJ/$U10.jsonl" SessionEnd | AIB_ARCHIVE_SYNC=0 AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook end claude >/dev/null 2>&1; rc=$?
+payload "$U10" "$PROJ/$U10.jsonl" SessionEnd | AIB_ARCHIVE_DIR="$TMP/ro/archive" AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook end claude >/dev/null 2>&1; rc=$?
 t1=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
-chmod 700 "$AIB_ARCHIVE_DIR/.intent" "$AIB_ARCHIVE_DIR/.state"
+[ ! -e "$TMP/ro/archive" ] || fail "test setup: archive dir should not be creatable"
+chmod 700 "$TMP/ro"
 [ "$rc" = 0 ] || fail "hook end must not fail when the archive is unwritable"
 awk -v a="$t0" -v b="$t1" 'BEGIN { exit (b - a < 0.6) ? 0 : 1 }' || fail "hook end too slow for the ~0.9s SessionEnd budget ($t0 → $t1)"
-pass "hook end stays under the SessionEnd budget and never fails on archive errors"
+pass "hook start/end stay fast and succeed when the archive cannot be written"
 
 # --- 11. Real detached worker: the hook returns, the worker finishes afterwards ------------
 U11="11111111-aaaa-3333-4444-555555555555"; cp "$SRC" "$PROJ/$U11.jsonl"
@@ -231,4 +237,29 @@ t1="$(cat "$TMP/t16")"
 awk -v a="$t0" -v b="$t1" 'BEGIN { exit (b - a < 0.6) ? 0 : 1 }' || fail "open stdin stalled hook end ($t0 → $t1)"
 ls "$AIB_ARCHIVE_DIR/.intent/$U16."* >/dev/null 2>&1 || fail "payload from an open stdin was not used"
 pass "hook end reads a complete payload without waiting for EOF"
+# --- 17. Split payload delivery is read whole --------------------------------------------
+U17="17171717-2222-3333-4444-555555555555"; cp "$SRC" "$PROJ/$U17.jsonl"
+full="$(payload "$U17" "$PROJ/$U17.jsonl" SessionEnd)"
+{ printf '%s' "${full:0:20}"; sleep 0.1; printf '%s' "${full:20}"; } \
+    | AIB_ARCHIVE_NO_WORKER=1 AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook end claude >/dev/null 2>&1
+ls "$AIB_ARCHIVE_DIR/.intent/$U17."* >/dev/null 2>&1 || fail "payload delivered in two writes was cut short"
+pass "a payload delivered in pieces is read until it parses"
+
+# --- 18. verify catches a damaged archive; a stale prefix cache cannot cause loss --------
+"$AIB_BIN" archive run "$U17" >/dev/null 2>&1
+"$AIB_BIN" archive verify >/dev/null 2>&1 || fail "verify should pass on healthy archives"
+A17="$AIB_ARCHIVE_DIR/claude/$U17.jsonl.gz"; cp "$A17" "$TMP/a17.bak"
+printf 'garbage' >> "$A17"
+"$AIB_BIN" archive verify >/dev/null 2>&1 && fail "verify must report a damaged archive"
+cp "$TMP/a17.bak" "$A17"
+# State claims an older prefix than the archive really holds; the decision must use the file.
+printf '{"type":"user","timestamp":"2026-10-16T05:00:00Z","message":{"content":"B-part"}}\n' >> "$PROJ/$U17.jsonl"
+"$AIB_BIN" archive run "$U17" >/dev/null 2>&1        # archive now holds ...+B
+sed -i '' '$d' "$PROJ/$U17.jsonl" 2>/dev/null || sed -i '$d' "$PROJ/$U17.jsonl"
+printf '{"type":"user","timestamp":"2026-10-16T05:00:01Z","message":{"content":"C-part"}}\n' >> "$PROJ/$U17.jsonl"
+"$AIB_BIN" archive run "$U17" >/dev/null 2>&1        # source is ...+C: not an extension of ...+B
+gzip -dc "$A17" | grep -q "B-part" || fail "the B part was lost from the main archive"
+ls "$AIB_ARCHIVE_DIR/claude/$U17."*.jsonl.gz 2>/dev/null | grep -v "/$U17.jsonl.gz" | xargs gzip -dc 2>/dev/null | grep -q "C-part" \
+    || fail "the C rewrite was not kept as a variant"
+pass "verify detects damage; a rewrite never replaces content the archive already holds"
 echo "All transcript archive tests passed."

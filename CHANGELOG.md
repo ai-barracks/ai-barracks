@@ -5,7 +5,7 @@
 ### Added
 - **Claude transcript archive.** Claude Code deletes `~/.claude/projects/*/*.jsonl` after `cleanupPeriodDays` (~30 days), so the raw conversation behind each curated session record vanished. SessionStart/SessionEnd now read `transcript_path` from the hook stdin and only record intent (Claude Code kills a SessionEnd hook after ~0.9s). A detached worker copies the transcript under a per-uuid lock into `~/.aib/archive` (0700/0600, outside git), verifies the gzip by sha256, extends in place when a resume appended, keeps a rewritten copy beside the old one, and records `pending/succeeded/failed/source_missing` with the last error. Any barrack's SessionStart retries unfinished work. Session files are never touched.
 - Metadata-only digest per transcript: time range, models, prompt/turn counts, tool calls/errors (MCP server names masked), tokens deduplicated by `message.id`, sidechain and parse-failure counts. No prompts, paths, commands or tool output.
-- `aib archive backfill [--all] | status | show <uuid|sid> | prune --older-than <days> | run <uuid>|--pending`.
+- `aib archive backfill [--all] | status | show <uuid|sid> | verify | prune --older-than <days> | run <uuid>|--pending`. `verify` checks every archive's gzip CRC and decompressed sha (the per-session fast path only compares size and mtime).
 
 ### Changed
 - A missing `scripts/transcript-archive.sh` (partial install) degrades to no-op hooks instead of breaking session start/end.

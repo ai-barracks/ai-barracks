@@ -15,7 +15,8 @@
 #   .intent/<uuid>.<ts>.<pid>.<n>   hook intents (src/sid/cwd), merged by the worker
 #   .state/<uuid>                   key=value, written only under the lock
 #   .digest/<uuid>.json             metadata only — no prompts, paths, commands or output
-#   .lock/<uuid>/owner              "<pid>.<token>"; dead or >1h-old owners are reclaimed
+#   .lock/<uuid>/owner              "<pid>|<process start>|<token>"; reclaimed only when that
+#                                   process is gone (pid dead or reused), never by age
 #   .log, .pruned.log
 
 AIB_ARCHIVE_DIR="${AIB_ARCHIVE_DIR:-$HOME/.aib/archive}"
@@ -29,6 +30,8 @@ _arch_mkdir() { (umask 077; mkdir -p "$1") 2>/dev/null && chmod 700 "$1" 2>/dev/
 _arch_sha_file() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1; }
 # Sub-second mtime so a same-length rewrite within one second is still noticed.
 _arch_mtime() { stat -f %Fm "$1" 2>/dev/null || stat -c %.9Y "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null; }
+_arch_size() { stat -f %z "$1" 2>/dev/null || stat -c %s "$1" 2>/dev/null; }   # lstat: never reads content
+_arch_proc_start() { ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'; }
 _arch_age() { echo $(( $(date +%s) - $(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || date +%s) )); }
 
 # _arch_gz_sha <gz>: sha256 of the decompressed content; fails on any gzip error.
@@ -45,7 +48,7 @@ _arch_projects_dir() {
     (cd "$base/projects" && pwd -P)
 }
 
-# Hook payload from stdin: stop as soon as the JSON object is complete, at 64 KiB, or after
+# Hook payload from stdin: stop as soon as the JSON object parses, at 64 KiB, or after
 # 0.3s — whichever comes first — so a writer that never closes stdin cannot eat the
 # SessionEnd budget. (perl ships with macOS; shasum itself is a perl script.)
 _arch_read_payload() {
@@ -54,12 +57,14 @@ _arch_read_payload() {
     if command -v perl >/dev/null 2>&1; then
         _ARCH_PAYLOAD="$(perl -e '
             use IO::Select; use Time::HiRes qw(time);
+            my $j = eval { require JSON::PP; JSON::PP->new };
             my $s = IO::Select->new(\*STDIN); my ($b, $d) = ("", time + 0.3);
             while (length($b) < 65536) {
                 my $left = $d - time; last if $left <= 0;
                 last unless $s->can_read($left);
                 my $n = sysread(STDIN, my $c, 65536 - length($b)); last if !$n;
-                $b .= $c; last if $b =~ /\}\s*\z/;
+                $b .= $c;
+                last if ($j ? eval { $j->decode($b); 1 } : $b =~ /\}\s*\z/);   # a complete JSON value
             }
             print $b;' 2>/dev/null)" || _ARCH_PAYLOAD=""
     else
@@ -125,7 +130,7 @@ _arch_has_intent() { ls "$AIB_ARCHIVE_DIR/.intent/$1."* >/dev/null 2>&1; }
 
 # Merge this uuid's intents into its state (lock held). Prints "1" if any was merged.
 _arch_merge_intents() {
-    local uuid="$1" f src sid cwd sids merged=0
+    local uuid="$1" f src sid cwd sids merged=0 done_files=()
     sids="$(_arch_state_get "$uuid" sids)"; src="$(_arch_state_get "$uuid" src)"; cwd="$(_arch_state_get "$uuid" cwd)"
     for f in "$AIB_ARCHIVE_DIR/.intent/$uuid."*; do
         [ -f "$f" ] || continue
@@ -133,25 +138,26 @@ _arch_merge_intents() {
         sid="$(sed -n 's/^sid=//p' "$f" | tail -n 1)"
         [ -n "$(sed -n 's/^cwd=//p' "$f")" ] && cwd="$(sed -n 's/^cwd=//p' "$f" | tail -n 1)"
         if [ -n "$sid" ]; then case ",$sids," in *",$sid,"*) ;; *) sids="${sids:+$sids,}$sid" ;; esac; fi
-        merged=1
+        merged=1; done_files+=("$f")
     done
     if [ "$merged" = 1 ]; then
         _arch_state_set "$uuid" "state=pending" "src=$src" "sids=$sids" "cwd=$cwd" || return 1
-        rm -f "$AIB_ARCHIVE_DIR/.intent/$uuid."* 2>/dev/null
+        rm -f "${done_files[@]}" 2>/dev/null     # not a glob: intents posted meanwhile stay queued
     fi
     printf '%s\n' "$merged"
 }
 
 _arch_lock() {
-    local uuid="$1" d="$AIB_ARCHIVE_DIR/.lock/$1" m owner pid token
+    local uuid="$1" d="$AIB_ARCHIVE_DIR/.lock/$1" m owner pid pstart token
     _arch_mkdir "$AIB_ARCHIVE_DIR/.lock" || return 1
-    token="$$.$RANDOM$RANDOM"
+    token="$$|$(_arch_proc_start $$)|$RANDOM$RANDOM"
     if mkdir "$d" 2>/dev/null; then printf '%s\n' "$token" > "$d/owner"; _ARCH_LOCK_TOKEN="$token"; return 0; fi
-    owner="$(cat "$d/owner" 2>/dev/null || true)"; pid="${owner%%.*}"
+    owner="$(cat "$d/owner" 2>/dev/null || true)"
+    pid="${owner%%|*}"; pstart="${owner#*|}"; pstart="${pstart%|*}"
     if [ -z "$owner" ]; then
         [ "$(_arch_age "$d")" -lt 5 ] && return 1      # holder is between mkdir and writing owner
-    elif kill -0 "$pid" 2>/dev/null && [ "$(_arch_age "$d")" -lt 3600 ]; then
-        return 1                                         # live (a worker never runs for an hour)
+    elif [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && [ "$(_arch_proc_start "$pid")" = "$pstart" ]; then
+        return 1                                         # the owning process is alive: never steal
     fi
     # Reclaim a dead lock under a mutex, re-checking the owner so a fresh lock is never taken.
     m="$d.reclaim"
@@ -160,9 +166,10 @@ _arch_lock() {
         return 1
     fi
     if [ "$(cat "$d/owner" 2>/dev/null || true)" = "$owner" ]; then
-        rm -rf "$d"; rm -f "$AIB_ARCHIVE_DIR/claude/.tmp.$uuid."* 2>/dev/null
+        rm -rf "$d"
         if mkdir "$d" 2>/dev/null; then
             printf '%s\n' "$token" > "$d/owner"; _ARCH_LOCK_TOKEN="$token"
+            rm -f "$AIB_ARCHIVE_DIR/claude/.tmp.$uuid."* 2>/dev/null   # orphans: we hold the lock now
             rmdir "$m" 2>/dev/null; return 0
         fi
     fi
@@ -196,13 +203,13 @@ _arch_store() {
     local uuid="$1" copy="$2" sha="$3" size="$4" dir="$AIB_ARCHIVE_DIR/claude" main old_sha old_size dest
     main="$dir/$uuid.jsonl.gz"; dest="$main"
     if [ -f "$main" ]; then
-        old_sha="$(_arch_state_get "$uuid" main_sha)"; old_size="$(_arch_state_get "$uuid" main_size)"
+        # Decide from the archive itself (verified), never from cached state: a worker killed
+        # between publishing and recording would otherwise leave a stale prefix hash.
+        old_sha="$(_arch_gz_sha "$main" || true)"
+        old_size="$( (set -o pipefail; gzip -dc "$main" 2>/dev/null | wc -c | tr -d ' ') || true)"
         if [ -z "$old_sha" ] || [ -z "$old_size" ]; then
-            old_sha="$(_arch_gz_sha "$main" || true)"
-            old_size="$(gzip -dc "$main" 2>/dev/null | wc -c | tr -d ' ' || true)"
-        fi
-        if [ -z "$old_sha" ]; then
-            dest="$main"                                    # unreadable main: rewrite it
+            mv -f "$main" "$dir/$uuid.unreadable.$(date +%s).jsonl.gz" 2>/dev/null || true   # keep as evidence
+            dest="$main"
         elif [ "$sha" = "$old_sha" ]; then
             printf '%s 0\n' "${main##*/}"; return 0
         elif [ "$size" -gt "$old_size" ] && [ "$(head -c "$old_size" "$copy" | shasum -a 256 | cut -d' ' -f1)" = "$old_sha" ]; then
@@ -216,7 +223,6 @@ _arch_store() {
         fi
     fi
     _arch_write_gz "$copy" "$sha" "$dest" || return 1
-    if [ "$dest" = "$main" ]; then _arch_state_set "$uuid" "main_sha=$sha" "main_size=$size" || return 1; fi
     printf '%s 1\n' "${dest##*/}"
 }
 
@@ -292,10 +298,14 @@ _arch_process() {
         return 0
     fi
     [ "$vrc" -eq 0 ] || { _arch_fail "$uuid" invalid_source; return 1; }
-    size="$(wc -c < "$canon" | tr -d ' ')"; mtime="$(_arch_mtime "$canon")"; archive="$(_arch_state_get "$uuid" archive)"
+    size="$(_arch_size "$canon")"; mtime="$(_arch_mtime "$canon")"; archive="$(_arch_state_get "$uuid" archive)"
+    # Fast path (runs on every SessionStart sweep): source unchanged and the archive file is the
+    # one we wrote (size+mtime). Full integrity is `aib archive verify`, not a per-sweep cost.
     if [ "$state" = succeeded ] && [ "$(_arch_state_get "$uuid" src_size)" = "$size" ] \
         && [ "$(_arch_state_get "$uuid" src_mtime)" = "$mtime" ] \
         && [ -n "$archive" ] && [ -f "$AIB_ARCHIVE_DIR/claude/$archive" ] \
+        && [ "$(_arch_size "$AIB_ARCHIVE_DIR/claude/$archive")" = "$(_arch_state_get "$uuid" archive_size)" ] \
+        && [ "$(_arch_mtime "$AIB_ARCHIVE_DIR/claude/$archive")" = "$(_arch_state_get "$uuid" archive_mtime)" ] \
         && [ "$(_arch_state_get "$uuid" digest_state)" = ok ]; then
         return 0
     fi
@@ -314,12 +324,13 @@ _arch_process() {
     name="${stored% *}"; written="${stored##* }"
     _arch_digest "$uuid" "$copy" "$sha" "$name" || digest_state=failed
     rm -f "$copy"
+    local fileinfo=("archive=$name" "archive_size=$(_arch_size "$dir/$name")" "archive_mtime=$(_arch_mtime "$dir/$name")")
     if [ "$written" = 1 ]; then
         _arch_state_set "$uuid" "state=succeeded" "src_size=$size" "src_mtime=$mtime" "src_sha=$sha" \
-            "archive=$name" "archived_at=$(date +%s)" "digest_state=$digest_state" "last_error=" "attempts=0"
+            "${fileinfo[@]}" "archived_at=$(date +%s)" "digest_state=$digest_state" "last_error=" "attempts=0"
     else
         _arch_state_set "$uuid" "state=succeeded" "src_size=$size" "src_mtime=$mtime" "src_sha=$sha" \
-            "archive=$name" "digest_state=$digest_state" "last_error=" "attempts=0"
+            "${fileinfo[@]}" "digest_state=$digest_state" "last_error=" "attempts=0"
     fi
 }
 
@@ -491,6 +502,23 @@ _arch_prune() {
     return 0
 }
 
+# Full integrity pass (gzip CRC + decompressed sha of the latest copy). Exit 1 on any problem.
+_arch_verify() {
+    local f uuid name sha bad=0 n=0
+    for f in "$AIB_ARCHIVE_DIR/.state/"*; do
+        [ -f "$f" ] || continue
+        uuid="${f##*/}"; [[ "$uuid" =~ $_ARCH_UUID_RE ]] || continue
+        [ "$(_arch_state_get "$uuid" state)" = succeeded ] || continue
+        name="$(_arch_state_get "$uuid" archive)"; n=$((n + 1))
+        sha="$(_arch_gz_sha "$AIB_ARCHIVE_DIR/claude/$name" || true)"
+        if [ -z "$sha" ] || [ "$sha" != "$(_arch_state_get "$uuid" src_sha)" ]; then
+            echo "BAD $uuid $name"; bad=$((bad + 1))
+        fi
+    done
+    echo "verified ${n} archive(s), ${bad} bad"
+    [ "$bad" -eq 0 ]
+}
+
 cmd_archive() {
     umask 077
     case "${1:-}" in
@@ -499,6 +527,7 @@ cmd_archive() {
         status)   _arch_status ;;
         show)     shift; _arch_show "${1:-}" ;;
         prune)    shift; _arch_prune "$@" ;;
-        *) log_err "Usage: aib archive <run <uuid>|run --pending|backfill [--all]|status|show <uuid|sid>|prune --older-than <days>>"; return 1 ;;
+        verify)   _arch_verify ;;
+        *) log_err "Usage: aib archive <run <uuid>|run --pending|backfill [--all]|status|show <uuid|sid>|verify|prune --older-than <days>>"; return 1 ;;
     esac
 }
