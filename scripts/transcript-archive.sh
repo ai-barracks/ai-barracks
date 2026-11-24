@@ -364,7 +364,11 @@ _arch_run_pending() {
     return 0
 }
 
-# _arch_spawn <archive run args...>: detached worker (survives the CLI exiting).
+# _arch_spawn <archive run args...>: detached worker (survives the CLI exiting). It runs in a
+# session of its own: nohup alone kept it in the terminal's session, and CommandCenter 2
+# closes a pane by SIGKILLing whatever is left in that session 3 s after the hang-up, which
+# killed the worker mid-copy (state=running, stale lock, .tmp files until the next sweep).
+# /usr/bin/perl ships with macOS (python3 there may be the CLT install shim); nohup otherwise.
 _arch_spawn() {
     [ -n "${AIB_ARCHIVE_NO_WORKER:-}" ] && return 0
     if [ "${AIB_ARCHIVE_SYNC:-}" = 1 ]; then
@@ -372,7 +376,9 @@ _arch_spawn() {
         return 0
     fi
     _arch_mkdir "$AIB_ARCHIVE_DIR" || return 0
-    (cd / && umask 077 && nohup "$SCRIPT_DIR/aib" archive run "$@" </dev/null >>"$AIB_ARCHIVE_DIR/.log" 2>&1 &) 2>/dev/null || true
+    local detach=(nohup)
+    [ -x /usr/bin/perl ] && detach=(/usr/bin/perl -MPOSIX -e 'POSIX::setsid(); $SIG{HUP} = "IGNORE"; exec @ARGV or exit 127')
+    (cd / && umask 077 && "${detach[@]}" "$SCRIPT_DIR/aib" archive run "$@" </dev/null >>"$AIB_ARCHIVE_DIR/.log" 2>&1 &) 2>/dev/null || true
 }
 
 # _arch_hook <SessionStart|SessionEnd> <aib-session-id or "">: Claude hooks only. Never fails.
