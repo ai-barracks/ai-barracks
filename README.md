@@ -481,7 +481,9 @@ aib sync /path/to/barrack            # 실제 적용
 
 ## 🩹 Troubleshooting
 
-### Claude TUI가 CommandCenter 내장 터미널에서 입력을 안 받을 때
+### Claude TUI가 CommandCenter 1.x 내장 터미널에서 입력을 안 받을 때
+
+CommandCenter 1.x(xterm.js) 내장 터미널에서 보고된 문제입니다. CommandCenter 2는 Ghostty 터미널을 씁니다.
 
 증상: `aib start claude` 후 TUI는 보이는데 키 입력(Ctrl+C 포함)이 전부 무시되고, 외부 macOS Terminal.app에서는 같은 명령이 정상.
 
@@ -533,7 +535,7 @@ Claude/Gemini/Codex가 **동일한 파일 포맷**(`sessions/{id}.md`, `wiki/`, 
 
 CLI 외에 데스크톱 앱으로도 배럭을 관제할 수 있습니다.
 
-[**AI Barracks CommandCenter 2**](https://github.com/ai-barracks/ai-barracks-cc) — Swift + [libghostty](https://github.com/ghostty-org/ghostty)로 만든 macOS 네이티브 앱(Apple Silicon, macOS 14+). [v2.0.0 릴리스](https://github.com/ai-barracks/ai-barracks-cc/releases/tag/v2.0.0)
+[**AI Barracks CommandCenter 2**](https://github.com/ai-barracks/ai-barracks-cc) — Swift + [libghostty](https://github.com/ghostty-org/ghostty)로 만든 macOS 네이티브 앱(Apple Silicon, macOS 14+, `aib` 1.6.0 이상). [최신 릴리스](https://github.com/ai-barracks/ai-barracks-cc/releases/latest)
 
 - 🤖 배럭별 에이전트 작업면: Claude Code·Codex를 분할 터미널로 띄우고 에이전트 목록에서 상태·작업을 확인 (앱을 꺼도 세션 유지)
 - 🔔 주의 · 작업 중: 입력을 기다리거나 끝났는데 안 본 세션을 모든 배럭에서 한눈에
@@ -541,6 +543,10 @@ CLI 외에 데스크톱 앱으로도 배럭을 관제할 수 있습니다.
 - ✏️ `SOUL.md`/`RULES.md`/`GROWTH.md`/`agent.yaml` 폼 편집 (편집 중 바깥 수정 감지)
 - 📜 History(세션 실록·Continue·터미널 출력 보관), Wiki, Skills, Council, Git
 - 🔍 ⌘K 통합 검색 (세션/위키/규칙) + 배럭 골라서 Sync
+- 🧹 **정리하고 닫기**(⇧⌘W): 에이전트에게 세션 종료 절차("끝" — Log·Decisions 마무리, Growth Audit, Wiki Extractions)를 시키고, 그 턴이 끝나면 터미널을 닫음
+- ⌨️ 단축키 설정(설정 › 단축키): 키 위치로 동작해 한/영 입력 상태와 무관
+
+**CC가 쓰는 aib 기능**: 에이전트는 `aib start <client>`로 띄우고, 상태(작업 중·입력 대기·완료)는 hook이 쓰는 `sessions/.live/` sidecar로 봅니다. Codex 상태는 `aib hooks codex install`을 한 배럭에서만 보입니다. 터미널을 X로 바로 닫으면 aib의 SessionEnd hook(Claude)·래퍼(Codex)가 세션 기록(SESSIONS.md·Status·Ended·봉인)은 닫지만, 에이전트가 하는 Growth Audit은 빠집니다 — 이때는 다음 세션 시작 때 `[AIB VIOLATION]`/"no Wiki Extractions" 안내로 사후 정리를 요청합니다.
 
 v1(Tauri v2 + React)은 [`v1` 브랜치](https://github.com/ai-barracks/ai-barracks-cc/tree/v1)와 [v1.6.1](https://github.com/ai-barracks/ai-barracks-cc/releases/tag/v1.6.1)에 있습니다.
 
