@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.6.2] - 2026-11-25
+
+### Fixed
+- **Hooks act only in a barrack.** The user-level Claude hooks run in every session, wherever it starts, and created `SESSIONS.md`, `sessions/` and a session file in plain repos (found in two on 2026-11-25). A barrack is a folder with `agent.yaml`, or one in the registry; elsewhere `aib hook …` and `aib hook native codex` are silent no-ops (Codex's Stop still answers `{}`).
+- **aib finds claude and codex off PATH.** CommandCenter runs aib through a login shell that skips `~/.zshrc`, where the official installers put `~/.local/bin`: on a new Mac aib could not find claude, and on another the app ran a stale Homebrew Claude (2.1.118) while the terminal ran the official install (2.1.331). aib looks on PATH, then in `~/.local/bin`, `~/.claude/local`, Homebrew, npm/nvm, volta, bun, mise and asdf, and `aib start` puts an off-PATH client's folder first on PATH.
+
+### Added
+- `aib install <claude|codex>`, and the same offer from `aib init`/`aib start` when a client is missing: in a terminal aib asks, then installs the official way (Claude: `curl -fsSL https://claude.ai/install.sh | bash`, auto-updating; Codex: `brew install --cask codex`, else npm); without a terminal it prints the command.
+- `aib doctor`: the aib in use and whether a newer release is out, which claude/codex aib runs, every other install with its version (warns when versions differ), Claude/Codex hook wiring.
+- `aib update`: checks GitHub's latest aib release and, for a Homebrew install, asks and runs `brew update && brew upgrade ai-barracks/ai-barracks/ai-barracks` (the full name — an older tap may hold a formula of the same name). Other installs get instructions. Only `update` and `doctor` use the network.
+- **Codex hooks user-level, like Claude's.** `aib hooks codex install --user` writes `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`); `aib init` and `aib sync` set it up when Codex is installed (`AIB_CODEX_HOOKS=0` opts out) and say to trust the hooks once in Codex `/hooks` — one trust covers every barrack. The user's own hooks are kept, nothing is added twice, and a symlinked file is never written through. Codex's trust is never bypassed.
+
+### Changed
+- `aib sync` also refreshes Claude's hook events (e.g. `UserPromptSubmit` from 1.6.1) and installs Codex's user-level hooks.
+
 ## [1.6.1] - 2026-11-24
 
 ### Fixed

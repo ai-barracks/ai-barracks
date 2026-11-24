@@ -133,7 +133,7 @@ _aib_doctor_client() {
 
 # aib doctor: what aib and CommandCenter will run on this Mac.
 cmd_doctor() {
-    log_info "aib $AIB_VERSION ($SCRIPT_DIR/aib)"
+    if declare -F _aib_doctor_self >/dev/null; then _aib_doctor_self; else log_info "aib $AIB_VERSION ($SCRIPT_DIR/aib)"; fi
     if command -v jq >/dev/null 2>&1; then log_ok "jq: $(command -v jq)"; else log_err "jq: not installed (brew install jq)"; fi
     _aib_doctor_client claude
     _aib_doctor_client codex

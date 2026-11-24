@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-AIB_VERSION="1.6.1"
+AIB_VERSION="1.6.2"
 # Use BASH_SOURCE[0] so `source bin/aib` works from any cwd
 # (AIB_SOURCE_ONLY=1 source "$AIB_BIN" is used by tests after `cd`).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,6 +25,8 @@ TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 source "$(dirname "$TEMPLATE_DIR")/scripts/native-codex.sh"
 # Finding/installing claude and codex. A partially updated install (new aib,
 # old payload) falls back to PATH only.
+_AIB_UPDATE_SH="$(dirname "$TEMPLATE_DIR")/scripts/aib-update.sh"
+if [ -f "$_AIB_UPDATE_SH" ]; then source "$_AIB_UPDATE_SH"; fi
 _AIB_CLIENTS_SH="$(dirname "$TEMPLATE_DIR")/scripts/agent-clients.sh"
 if [ -f "$_AIB_CLIENTS_SH" ]; then
     source "$_AIB_CLIENTS_SH"
@@ -2691,6 +2693,7 @@ case "${1:-}" in
         ;;
     install) shift; cmd_install "$@" ;;
     doctor)  shift; cmd_doctor "$@" ;;
+    update)  shift; cmd_update "$@" ;;
     hooks) shift; [ "${1:-}" = codex ] && [ "${2:-}" = install ] || { log_err "Usage: aib hooks codex install [--user | path]"; exit 1; }; shift 2; cmd_hooks_codex_install "$@" ;;
     status)  cmd_status ;;
     sync)    shift; cmd_sync "$@" ;;
@@ -2732,6 +2735,7 @@ case "${1:-}" in
         echo "  init [path]                    Initialize barrack + configure hooks"
         echo "  install <claude|codex>         Install a missing agent CLI the official way (asks first)"
         echo "  doctor                         Show which claude/codex aib runs, duplicates, hooks"
+        echo "  update                         Update aib when a newer release is out (Homebrew; asks first)"
         echo "  start <client> [task] [--skip-permissions]  Start LLM session with tracking"
         echo "  hook start <client>            (Auto) Called by CLI SessionStart hooks"
         echo "  hooks codex install --user      Install Codex hooks for every barrack (trust once in Codex /hooks)"
