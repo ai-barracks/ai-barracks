@@ -533,14 +533,16 @@ Claude/Gemini/Codex가 **동일한 파일 포맷**(`sessions/{id}.md`, `wiki/`, 
 
 CLI 외에 데스크톱 앱으로도 배럭을 관제할 수 있습니다.
 
-[**AI Barracks CommandCenter**](https://github.com/ai-barracks/ai-barracks-cc) — Tauri v2 (Rust + React) 기반 macOS 앱.
+[**AI Barracks CommandCenter 2**](https://github.com/ai-barracks/ai-barracks-cc) — Swift + [libghostty](https://github.com/ghostty-org/ghostty)로 만든 macOS 네이티브 앱(Apple Silicon, macOS 14+). [v2.0.0 릴리스](https://github.com/ai-barracks/ai-barracks-cc/releases/tag/v2.0.0)
 
-- 🏠 배럭 목록 + 상태 한눈에 보기
-- ✏️ `SOUL.md`/`RULES.md`/`agent.yaml` 구조화된 편집 UI
-- ⏱️ 에이전트 히스토리 타임라인 + Continue (완료 작업 이어받기)
-- 🔍 위키 탐색 + 전체 검색 (세션/위키/규칙 통합)
-- 🔄 버전 대시보드 + 선택적/일괄 Sync
-- 🌗 Light/Dark 테마 + 파일 실시간 감시
+- 🤖 배럭별 에이전트 작업면: Claude Code·Codex를 분할 터미널로 띄우고 에이전트 목록에서 상태·작업을 확인 (앱을 꺼도 세션 유지)
+- 🔔 주의 · 작업 중: 입력을 기다리거나 끝났는데 안 본 세션을 모든 배럭에서 한눈에
+- 📁 Files·Outputs: 에이전트 산출물을 폴더 트리와 Markdown 뷰어로 읽고 편집
+- ✏️ `SOUL.md`/`RULES.md`/`GROWTH.md`/`agent.yaml` 폼 편집 (편집 중 바깥 수정 감지)
+- 📜 History(세션 실록·Continue·터미널 출력 보관), Wiki, Skills, Council, Git
+- 🔍 ⌘K 통합 검색 (세션/위키/규칙) + 배럭 골라서 Sync
+
+v1(Tauri v2 + React)은 [`v1` 브랜치](https://github.com/ai-barracks/ai-barracks-cc/tree/v1)와 [v1.6.1](https://github.com/ai-barracks/ai-barracks-cc/releases/tag/v1.6.1)에 있습니다.
 
 > CC는 ai-barracks CLI의 GUI 확장입니다. CLI(`aib`) 없이는 동작하지 않습니다.
 > **CLI = 엔진, CC = 조종석. 두 프로젝트는 한 쌍입니다.**
@@ -613,4 +615,4 @@ Native payload의 session ID로 routing하므로 같은 app-server PID의 대화
 
 `bash tests/run.sh`는 격리 HOME·가짜 provider/credential CLI로 회귀 계약을 검사합니다. 실제 계정·모델 품질·사용량 reset을 증명하는 live eval은 아닙니다. CLI 플래그가 지원되지 않으면 isolated Council은 실패하며 권한 우회 fallback은 없습니다.
 
-2026-10-01 후속 검증에서는 실제 설치된 v1.4.0 CLI의 `version`, 격리 HOME의 `init`, `sync --dry-run <path>` 파일 hash 불변, Codex hook definition 설치를 확인했습니다. Hook 설치는 project trust나 `/hooks` 승인을 대신하지 않으며 실제 모델을 호출하지 않았습니다. [v1.4.0 릴리즈 노트](https://github.com/ai-barracks/ai-barracks/releases/tag/v1.4.0)와 [CC native UI 검증 기록](https://github.com/ai-barracks/ai-barracks-cc/blob/main/docs/release-validation-1.5.md)을 함께 참고하세요.
+2026-10-01 후속 검증에서는 실제 설치된 v1.4.0 CLI의 `version`, 격리 HOME의 `init`, `sync --dry-run <path>` 파일 hash 불변, Codex hook definition 설치를 확인했습니다. Hook 설치는 project trust나 `/hooks` 승인을 대신하지 않으며 실제 모델을 호출하지 않았습니다. [v1.4.0 릴리즈 노트](https://github.com/ai-barracks/ai-barracks/releases/tag/v1.4.0)와 [CC native UI 검증 기록](https://github.com/ai-barracks/ai-barracks-cc/blob/v1/docs/release-validation-1.5.md)을 함께 참고하세요.
