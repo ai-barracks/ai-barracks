@@ -1791,7 +1791,8 @@ cmd_status() {
     # Sessions
     if [ -f "SESSIONS.md" ]; then
         local count
-        count=$(grep -c "^| [a-z]" SESSIONS.md 2>/dev/null || echo "0")
+        # grep -c prints "0" AND exits 1 on no match: `|| echo 0` made it "0\n0" (CC2 ⌘K "aib status").
+        count=$(grep -c "^| [a-z]" SESSIONS.md 2>/dev/null) || count=0
         echo -e "Sessions: ${GREEN}${count} active${NC}" >&2
         if [ "$count" -gt 0 ]; then
             grep "^| [a-z]" SESSIONS.md >&2
@@ -1804,9 +1805,11 @@ cmd_status() {
     if [ -d "sessions" ]; then
         local total active completed interrupted
         total=$(find sessions -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
-        active=$(grep -rl "Status.*active" sessions/*.md 2>/dev/null | wc -l | tr -d ' ')
-        completed=$(grep -rl "Status.*completed" sessions/*.md 2>/dev/null | wc -l | tr -d ' ')
-        interrupted=$(grep -rl "Status.*interrupted" sessions/*.md 2>/dev/null | wc -l | tr -d ' ')
+        # A new barrack has no session file: the unmatched glob made grep fail and, under
+        # pipefail + set -e, ended `aib status` there.
+        active=$( { grep -l "Status.*active" sessions/*.md 2>/dev/null || true; } | wc -l | tr -d ' ')
+        completed=$( { grep -l "Status.*completed" sessions/*.md 2>/dev/null || true; } | wc -l | tr -d ' ')
+        interrupted=$( { grep -l "Status.*interrupted" sessions/*.md 2>/dev/null || true; } | wc -l | tr -d ' ')
         echo -e "Session files: ${total} total (${GREEN}${active} active${NC}, ${completed} completed, ${YELLOW}${interrupted} interrupted${NC})" >&2
     fi
 

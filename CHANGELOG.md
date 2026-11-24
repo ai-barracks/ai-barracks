@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **`aib status` failed in two common cases** (found through CommandCenter 2's ⌘K "aib status"). With no active session, `grep -c … || echo "0"` produced `0\n0` (grep prints 0 and exits 1), so `[ "$count" -gt 0 ]` errored with "integer expression expected" and the command exited 1. In a barrack with no session file yet, the unmatched `sessions/*.md` glob made `grep` fail under `pipefail` + `set -e`, ending the command before the wiki line. Both now report counts and exit 0.
+- **The transcript-archive worker now runs in a session of its own.** It was only `nohup`'d, so it stayed in the terminal's session; CommandCenter 2 closes a pane by hanging up and, 3 s later, SIGKILLing every process left in that session (HUP-ignoring ones included, by design), which killed a worker mid-copy and left `state=running`, a stale lock and partial `.tmp` files until the next SessionStart sweep. The worker is started through `/usr/bin/perl` `POSIX::setsid` (falls back to `nohup`).
+
+### Docs
+- README: CommandCenter section for CC 2.1 (latest-release link, 정리하고 닫기, shortcuts, which aib features CC uses, what closing a pane with X does and does not do); the "Claude TUI ignores input" troubleshooting entry is marked as CommandCenter 1.x.
+
 ## [1.6.0] - 2026-10-16
 
 ### Added
