@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-AIB_VERSION="1.6.0"
+AIB_VERSION="1.6.1"
 # Use BASH_SOURCE[0] so `source bin/aib` works from any cwd
 # (AIB_SOURCE_ONLY=1 source "$AIB_BIN" is used by tests after `cd`).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -735,9 +735,10 @@ cmd_session_state() {
     if [ ! -f "$f" ]; then
         [ -n "$want_json" ] && echo '{"effective":"none"}' || echo "none"; return 0
     fi
-    local state run_id ts pid now age alive acked eff stale_w
+    local state run_id ts pid event now age alive acked eff stale_w
     # Defensive: corrupt/unreadable JSON must yield 'unknown', not crash under set -e.
     state="$(jq -r '.state // empty' "$f" 2>/dev/null)" || state=""
+    event="$(jq -r '.event // empty' "$f" 2>/dev/null)" || event=""
     run_id="$(jq -r '.run_id // empty' "$f" 2>/dev/null)" || run_id=""
     ts="$(jq -r '.ts // 0' "$f" 2>/dev/null)" || ts=0
     pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)" || pid=""
@@ -762,7 +763,10 @@ cmd_session_state() {
     case "$state" in
         done)    if [ "$acked" = 1 ]; then eff=idle; else eff=done; fi ;;
         blocked) if [ "$alive" = 1 ]; then eff=blocked; else eff=crashed; fi ;;
+        # SessionStart writes `working` (older readers expect the word) before any turn:
+        # an agent waiting for its first prompt is idle, however long it waits.
         working) if [ "$alive" = 0 ]; then eff=interrupted
+                 elif [ "$event" = SessionStart ]; then eff=idle
                  elif [ "$age" -gt "$stale_w" ]; then eff=working_stale
                  else eff=working; fi ;;
         *)       eff=unknown ;;
@@ -801,6 +805,7 @@ cmd_hook_event() {
     local state reason
     case "$event" in
         SessionStart)            state=working; reason=session_start ;;
+        UserPromptSubmit)        state=working; reason=prompt_submitted ;;
         PreToolUse|PostToolUse)  state=working; reason=tool_activity ;;
         PermissionRequest)       state=blocked; reason=approval_required ;;
         Notification)
@@ -946,10 +951,12 @@ configure_hooks() {
         if command -v jq &>/dev/null; then
             local tmp="${claude_settings}.tmp"
             # ensure(ev;cmd): idempotently add a command hook (no duplicates on re-run).
-            # SessionStart/End drive session lifecycle; Pre/Post/Notification/Stop drive liveness.
+            # SessionStart/End drive session lifecycle; UserPromptSubmit/Pre/Post/Notification/Stop
+            # drive liveness (a prompt starts a turn even when the answer uses no tool).
             jq \
               --arg start "aib hook start claude" \
               --arg end "aib hook end claude" \
+              --arg prompt "aib hook event claude UserPromptSubmit" \
               --arg pre "aib hook event claude PreToolUse" \
               --arg post "aib hook event claude PostToolUse" \
               --arg permission "aib hook event claude PermissionRequest" \
@@ -960,6 +967,7 @@ configure_hooks() {
                    | if any(.[]?; .hooks[]?.command == cmd) then . else . + [{matcher:"",hooks:[{type:"command",command:cmd}]}] end);
                .hooks = (.hooks // {})
                | ensure("SessionStart"; $start) | ensure("SessionEnd"; $end)
+               | ensure("UserPromptSubmit"; $prompt)
                | ensure("PreToolUse"; $pre)     | ensure("PostToolUse"; $post)
                | ensure("PermissionRequest"; $permission) | ensure("Notification"; $notif) | ensure("Stop"; $stop)' \
               "$claude_settings" > "$tmp" 2>/dev/null

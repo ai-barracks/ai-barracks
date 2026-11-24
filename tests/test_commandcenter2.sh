@@ -7,6 +7,8 @@
 #    left in that session (HUP-ignoring ones included) — the worker died mid-copy and left
 #    state=running, a stale lock and partial .tmp files until the next SessionStart.
 #    The worker must run in a session of its own.
+# 3. SessionStart writes state=working, so an agent waiting for its first prompt showed as
+#    "작업 중" and then "응답 없음" (stale) — it is idle until a prompt or tool says otherwise.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AIB_BIN="${SCRIPT_DIR}/../bin/aib"
@@ -50,5 +52,25 @@ for _ in $(seq 1 50); do [ -s "$AIB_TEST_OUT" ] && break; sleep 0.1; done
 [ -s "$AIB_TEST_OUT" ] || fail "archive worker did not run"
 [ "$(cat "$AIB_TEST_OUT")" = leader ] || fail "archive worker shares the caller's session ($(cat "$AIB_TEST_OUT")): a terminal that ends its session on close kills it"
 pass "archive worker runs in a session of its own"
+
+# --- 3. a freshly started agent is waiting, not working -------------------------------
+# SessionStart writes state=working (older readers rely on the word), but no turn has run:
+# CC2 showed an agent waiting for its first prompt as "작업 중" and, once
+# AIB_LIVE_STALE_WORKING passed, as "응답 없음".
+cd "$BR"
+AIB_LIVE_PID=$$ aib_live_write fresh working SessionStart session_start
+[ "$("$AIB_BIN" sessions state fresh)" = idle ] || fail "fresh agent (SessionStart, alive) is $("$AIB_BIN" sessions state fresh), not idle"
+jq '.ts -= 9999' sessions/.live/fresh.status > "$TMP/old" && mv "$TMP/old" sessions/.live/fresh.status
+[ "$(AIB_LIVE_STALE_WORKING=180 "$AIB_BIN" sessions state fresh)" = idle ] || fail "agent left waiting for its first prompt turned stale"
+AIB_LIVE_PID=999999 aib_live_write gone working SessionStart session_start
+[ "$("$AIB_BIN" sessions state gone)" = interrupted ] || fail "SessionStart with a dead pid must stay interrupted"
+pass "SessionStart folds to idle while the agent lives"
+
+# Claude Code's first answer without tools never reported working: a prompt is a turn start.
+echo fresh > sessions/.active
+out="$(AIB_LIVE_PID=$$ "$AIB_BIN" hook event claude UserPromptSubmit 2>/dev/null)"
+[ -z "$out" ] || fail "UserPromptSubmit hook printed '$out' (Claude Code adds hook stdout to the prompt)"
+[ "$("$AIB_BIN" sessions state fresh)" = working ] || fail "UserPromptSubmit does not mark the turn working"
+pass "UserPromptSubmit marks the turn working, silently"
 
 echo "ALL PASS: test_commandcenter2"

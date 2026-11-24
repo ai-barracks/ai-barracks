@@ -239,9 +239,9 @@ aib archive prune --older-than N # N일 지난 보관본 삭제 (기록 남김).
 
 `cleanup_stale`이 살아있는 세션을 last_update timestamp만 보고 `interrupted`로 오마킹하던 문제를 **프로세스 liveness**로 해결합니다:
 
-- SessionStart/PreToolUse/Notification/Stop hook이 `sessions/.live/<id>.status` sidecar를 atomic(temp+rename)하게 기록 — `state` + `pid` + `lstart`(프로세스 시작시각).
+- SessionStart/UserPromptSubmit/PreToolUse/Notification/Stop hook이 `sessions/.live/<id>.status` sidecar를 atomic(temp+rename)하게 기록 — `state` + `pid` + `lstart`(프로세스 시작시각).
 - `cleanup_stale`은 각 세션을 `kill -0`로 확인: **살아있으면 2h 초과해도 보존**(거짓 정리 방지), 죽었으면 즉시 정리, sidecar 없으면 기존 시간규칙으로 폴백. `lstart` 문자열 비교로 PID 재사용도 방어.
-- `aib sessions state <id> [--json]` — 세션의 effective 상태 조회: `working` / `working_stale` / `blocked` / `crashed` / `interrupted` / `done` / `idle`. 완전 headless(GUI 불필요).
+- `aib sessions state <id> [--json]` — 세션의 effective 상태 조회: `working` / `working_stale` / `blocked` / `crashed` / `interrupted` / `done` / `idle`. 막 시작해 첫 프롬프트를 기다리는 세션은 `idle`(v1.6.1). 완전 headless(GUI 불필요).
 - strict 모드 `AIB_CLEANUP_REQUIRE_LIVENESS=1`: sidecar 없는 레거시 세션도 시간만으로 죽이지 않음.
 - **`aib sessions gc [--dry-run]`** (v1.3.2) — 비정상 종료가 남긴 잔재 수거. 죽은 sidecar(`kill -0` 확증) 제거 + 해당 `.md`를 `interrupted`로 마감(변종 G), 그리고 sidecar가 없는 채 오래 `active`로 박힌 `.md` 마감(변종 B). SessionStart 자동 경로는 **죽음이 확증된 sidecar만** 정리하고, 시간 기반 `.md` 마감은 오탐 방지를 위해 이 수동 명령에서만 수행합니다. grace는 `AIB_REAP_ORPHAN_AGE`(기본 7200초).
 
