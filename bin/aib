@@ -23,6 +23,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_DIR="$(cd "$SCRIPT_DIR/../templates" && pwd)"
 
 source "$(dirname "$TEMPLATE_DIR")/scripts/native-codex.sh"
+# Finding/installing claude and codex. A partially updated install (new aib,
+# old payload) falls back to PATH only.
+_AIB_CLIENTS_SH="$(dirname "$TEMPLATE_DIR")/scripts/agent-clients.sh"
+if [ -f "$_AIB_CLIENTS_SH" ]; then
+    source "$_AIB_CLIENTS_SH"
+else
+    _aib_find_client() { command -v "$1"; }
+    _aib_offer_install() { log_err "$1 not found on PATH"; return 1; }
+fi
 # Transcript archive is optional at load time: a partially updated install must never
 # break session hooks, so fall back to no-ops when the script is missing.
 _AIB_ARCHIVE_SH="$(dirname "$TEMPLATE_DIR")/scripts/transcript-archive.sh"
@@ -953,46 +962,51 @@ cmd_init() {
 # ============================================================
 # Hook auto-configuration
 # ============================================================
+# Claude's user-level hooks (~/.claude/settings.json), idempotent.
+_aib_claude_configure_hooks() {
+    local claude_settings="${AIB_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+    mkdir -p "$(dirname "$claude_settings")" 2>/dev/null || true
+    [ -f "$claude_settings" ] || echo '{}' > "$claude_settings"
+    if command -v jq &>/dev/null; then
+        local tmp="${claude_settings}.tmp"
+        # ensure(ev;cmd): idempotently add a command hook (no duplicates on re-run).
+        # SessionStart/End drive session lifecycle; UserPromptSubmit/Pre/Post/Notification/Stop
+        # drive liveness (a prompt starts a turn even when the answer uses no tool).
+        jq \
+          --arg start "aib hook start claude" \
+          --arg end "aib hook end claude" \
+          --arg prompt "aib hook event claude UserPromptSubmit" \
+          --arg pre "aib hook event claude PreToolUse" \
+          --arg post "aib hook event claude PostToolUse" \
+          --arg permission "aib hook event claude PermissionRequest" \
+          --arg notif "aib hook event claude Notification" \
+          --arg stop "aib hook event claude Stop" \
+          'def ensure(ev; cmd):
+             .hooks[ev] = ((.hooks[ev] // [])
+               | if any(.[]?; .hooks[]?.command == cmd) then . else . + [{matcher:"",hooks:[{type:"command",command:cmd}]}] end);
+           .hooks = (.hooks // {})
+           | ensure("SessionStart"; $start) | ensure("SessionEnd"; $end)
+           | ensure("UserPromptSubmit"; $prompt)
+           | ensure("PreToolUse"; $pre)     | ensure("PostToolUse"; $post)
+           | ensure("PermissionRequest"; $permission) | ensure("Notification"; $notif) | ensure("Stop"; $stop)' \
+          "$claude_settings" > "$tmp" 2>/dev/null
+        if jq empty "$tmp" 2>/dev/null; then
+            mv "$tmp" "$claude_settings"
+            log_ok "Claude Code hooks configured (SessionStart/End + liveness events)"
+        else
+            rm -f "$tmp"; log_err "configure_hooks: jq failed for $claude_settings"
+        fi
+    else
+        log_warn "jq not found — add Claude hooks manually to ~/.claude/settings.json"
+    fi
+}
+
 configure_hooks() {
     log_info "Detecting installed CLIs and configuring hooks..."
 
-    # Claude Code
-    if command -v claude &>/dev/null; then
-        local claude_settings="${AIB_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
-        mkdir -p "$(dirname "$claude_settings")" 2>/dev/null || true
-        [ -f "$claude_settings" ] || echo '{}' > "$claude_settings"
-        if command -v jq &>/dev/null; then
-            local tmp="${claude_settings}.tmp"
-            # ensure(ev;cmd): idempotently add a command hook (no duplicates on re-run).
-            # SessionStart/End drive session lifecycle; UserPromptSubmit/Pre/Post/Notification/Stop
-            # drive liveness (a prompt starts a turn even when the answer uses no tool).
-            jq \
-              --arg start "aib hook start claude" \
-              --arg end "aib hook end claude" \
-              --arg prompt "aib hook event claude UserPromptSubmit" \
-              --arg pre "aib hook event claude PreToolUse" \
-              --arg post "aib hook event claude PostToolUse" \
-              --arg permission "aib hook event claude PermissionRequest" \
-              --arg notif "aib hook event claude Notification" \
-              --arg stop "aib hook event claude Stop" \
-              'def ensure(ev; cmd):
-                 .hooks[ev] = ((.hooks[ev] // [])
-                   | if any(.[]?; .hooks[]?.command == cmd) then . else . + [{matcher:"",hooks:[{type:"command",command:cmd}]}] end);
-               .hooks = (.hooks // {})
-               | ensure("SessionStart"; $start) | ensure("SessionEnd"; $end)
-               | ensure("UserPromptSubmit"; $prompt)
-               | ensure("PreToolUse"; $pre)     | ensure("PostToolUse"; $post)
-               | ensure("PermissionRequest"; $permission) | ensure("Notification"; $notif) | ensure("Stop"; $stop)' \
-              "$claude_settings" > "$tmp" 2>/dev/null
-            if jq empty "$tmp" 2>/dev/null; then
-                mv "$tmp" "$claude_settings"
-                log_ok "Claude Code hooks configured (SessionStart/End + liveness events)"
-            else
-                rm -f "$tmp"; log_err "configure_hooks: jq failed for $claude_settings"
-            fi
-        else
-            log_warn "jq not found — add Claude hooks manually to ~/.claude/settings.json"
-        fi
+    # Claude Code (found off PATH too; offered for install when missing)
+    if _aib_find_client claude >/dev/null || _aib_offer_install claude; then
+        _aib_claude_configure_hooks
     else
         log_info "Claude Code not installed, skipping"
     fi
@@ -1022,9 +1036,14 @@ configure_hooks() {
         log_info "Gemini CLI not installed, skipping"
     fi
 
-    # Codex CLI
-    if command -v codex &>/dev/null; then
-        log_warn "Codex CLI: native hooks are available in supported versions; this installation uses the aib start codex compatibility wrapper"
+    # Codex CLI: user-level hooks, like Claude's (one /hooks trust covers every
+    # barrack). AIB_CODEX_HOOKS=0 opts out.
+    if _aib_find_client codex >/dev/null || _aib_offer_install codex; then
+        if [ "${AIB_CODEX_HOOKS:-1}" = 0 ]; then
+            log_info "Codex hooks: skipped (AIB_CODEX_HOOKS=0)"
+        else
+            _aib_codex_install_user_hooks || log_warn "Codex hooks not installed — aib hooks codex install --user"
+        fi
     else
         log_info "Codex CLI not installed, skipping"
     fi
@@ -1678,6 +1697,18 @@ cmd_start() {
     fi
 
     case "$client" in claude|codex|gemini) ;; *) log_err "Unknown client: $client"; exit 1 ;; esac
+    # The client may be off PATH (a GUI app's login shell skips ~/.zshrc, where
+    # installers put ~/.local/bin): use the usual install folders, offer to
+    # install it when it is nowhere.
+    if [ "$client" != gemini ]; then
+        local client_bin
+        client_bin="$(_aib_find_client "$client")" \
+            || { _aib_offer_install "$client" && client_bin="$(_aib_find_client "$client")"; } || exit 1
+        if ! command -v "$client" >/dev/null 2>&1; then
+            PATH="$(dirname "$client_bin"):$PATH"; export PATH
+            log_info "$(client_name "$client"): $client_bin (not on PATH)"
+        fi
+    fi
     local launch_args=()
     [ -z "$model" ] || launch_args+=(--model "$model")
     if [ -n "$effort" ]; then
@@ -2403,6 +2434,15 @@ cmd_sync() {
         register_barrack "$target"
     fi
 
+    # 7. Agent hooks (user-level, idempotent): a barrack made with an older aib
+    #    gets the current Claude events and Codex's hooks too. Never prompts.
+    if ! $dry_run; then
+        _aib_find_client claude >/dev/null && _aib_claude_configure_hooks
+        if [ "${AIB_CODEX_HOOKS:-1}" != 0 ] && _aib_find_client codex >/dev/null; then
+            _aib_codex_install_user_hooks || log_warn "Codex hooks not installed — aib hooks codex install --user"
+        fi
+    fi
+
     log_ok "Sync complete${mode}"
 }
 
@@ -2649,7 +2689,9 @@ case "${1:-}" in
             *)        log_err "Usage: aib hook <start|end|continue|event> [args]"; exit 1 ;;
         esac
         ;;
-    hooks) shift; [ "${1:-}" = codex ] && [ "${2:-}" = install ] || { log_err "Usage: aib hooks codex install [path]"; exit 1; }; shift 2; cmd_hooks_codex_install "$@" ;;
+    install) shift; cmd_install "$@" ;;
+    doctor)  shift; cmd_doctor "$@" ;;
+    hooks) shift; [ "${1:-}" = codex ] && [ "${2:-}" = install ] || { log_err "Usage: aib hooks codex install [--user | path]"; exit 1; }; shift 2; cmd_hooks_codex_install "$@" ;;
     status)  cmd_status ;;
     sync)    shift; cmd_sync "$@" ;;
     council) shift; cmd_council "$@" ;;
@@ -2688,9 +2730,12 @@ case "${1:-}" in
         echo ""
         echo "Commands:"
         echo "  init [path]                    Initialize barrack + configure hooks"
+        echo "  install <claude|codex>         Install a missing agent CLI the official way (asks first)"
+        echo "  doctor                         Show which claude/codex aib runs, duplicates, hooks"
         echo "  start <client> [task] [--skip-permissions]  Start LLM session with tracking"
         echo "  hook start <client>            (Auto) Called by CLI SessionStart hooks"
-        echo "  hooks codex install [path]      Install opt-in native project hooks (requires /hooks trust)"
+        echo "  hooks codex install --user      Install Codex hooks for every barrack (trust once in Codex /hooks)"
+        echo "  hooks codex install [path]      Install Codex hooks for one project (requires /hooks trust)"
         echo "  hook end <client>              (Auto) Called by CLI SessionEnd hooks"
         echo "  hook continue <session_id>     Continue another CLI's session"
         echo "  barracks [list|remove|route|refresh]   Manage registered barracks"
