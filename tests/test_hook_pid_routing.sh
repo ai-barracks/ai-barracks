@@ -30,6 +30,7 @@ mkdir -p "$BR1"
 (
   cd "$BR1"
   cp "$TEMPLATE_DIR/SESSIONS.md" SESSIONS.md
+  touch "$(dirname "SESSIONS.md")/agent.yaml"  # a barrack (hooks act only there)
   mkdir -p sessions
 
   # Use two REAL background processes so kill -0 keeps reporting alive and
@@ -110,6 +111,7 @@ mkdir -p "$BR2"
 (
   cd "$BR2"
   cp "$TEMPLATE_DIR/SESSIONS.md" SESSIONS.md
+  touch "$(dirname "SESSIONS.md")/agent.yaml"  # a barrack (hooks act only there)
   mkdir -p sessions sessions/.live
   legacy_sid="claude-20260601-120000-legacy01"
   # Simulate a pre-upgrade session: row + .active but NO by-pid map.
@@ -141,6 +143,7 @@ mkdir -p "$BR4"
 (
   cd "$BR4"
   cp "$TEMPLATE_DIR/SESSIONS.md" SESSIONS.md
+  touch "$(dirname "SESSIONS.md")/agent.yaml"  # a barrack (hooks act only there)
   mkdir -p sessions
 
   sleep 600 & PID_A=$!
@@ -209,6 +212,7 @@ mkdir -p "$BR3"
 (
   cd "$BR3"
   cp "$TEMPLATE_DIR/SESSIONS.md" SESSIONS.md
+  touch "$(dirname "SESSIONS.md")/agent.yaml"  # a barrack (hooks act only there)
   mkdir -p sessions
 
   # Stub `claude` earlier in PATH. The stub mimics the real Claude CLI's hook

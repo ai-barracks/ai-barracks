@@ -21,6 +21,7 @@ trap 'rm -rf "$TMP"' EXIT
 # --- 1. aib status with 0 and 1 active sessions -------------------------------------
 BR="$TMP/barrack"; mkdir -p "$BR/sessions"
 cp "${SCRIPT_DIR}/../templates/SESSIONS.md" "$BR/SESSIONS.md"
+touch "$(dirname "$BR/SESSIONS.md")/agent.yaml"  # a barrack (hooks act only there)
 out="$(cd "$BR" && "$AIB_BIN" status 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] || fail "status with no session exits $rc: $out"
 case "$out" in *"integer expression"*) fail "status with no session: $out" ;; esac

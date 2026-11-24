@@ -16,6 +16,7 @@ AIB_SOURCE_ONLY=1 source "$AIB_BIN"
 set +e
 mkdir -p "$TMP/b/sessions" "$TMP/stubs"
 cp "$TEMPLATE_DIR/SESSIONS.md" "$TMP/b/SESSIONS.md"
+touch "$(dirname "$TMP/b/SESSIONS.md")/agent.yaml"  # a barrack (hooks act only there)
 cd "$TMP/b" || fail "cd"
 
 # The "agent" writes its own records into its session file, as the protocol requires.

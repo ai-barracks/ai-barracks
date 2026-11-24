@@ -29,7 +29,7 @@ cmd_hook_native_codex() (
     [ "$event" != Stop ] || printf '{}\n'
     native=$(printf '%s' "$payload" | jq -er '.session_id | select(type=="string" and length>0 and length<512)' 2>/dev/null) || exit 0
     # Project hooks run in the project cwd. Refuse writes through user-controlled symlinks.
-    [ -f AGENTS.md ] || exit 0
+    _aib_is_barrack || exit 0
     for i in sessions sessions/.live sessions/.live/native SESSIONS.md; do [ ! -L "$i" ] || exit 0; done
     mkdir -p sessions/.live/native
     # Bounded project-wide serialization; hooks in one event run concurrently.

@@ -19,6 +19,7 @@ set +e
 
 BR="$TMP/barrack"; mkdir -p "$BR/sessions"
 cp "$TEMPLATE_DIR/SESSIONS.md" "$BR/SESSIONS.md"
+touch "$(dirname "$BR/SESSIONS.md")/agent.yaml"  # a barrack (hooks act only there)
 BR_REAL="$(cd "$BR" && pwd -P)"
 SLUG="$(printf '%s' "$BR_REAL" | sed 's#[/.]#-#g')"
 PROJ="$CLAUDE_CONFIG_DIR/projects/$SLUG"; mkdir -p "$PROJ"

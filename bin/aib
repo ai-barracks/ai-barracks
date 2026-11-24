@@ -148,6 +148,19 @@ ensure_sessions_dir() {
 # --- Global barrack registry (~/.aib/barracks.json) ---
 AIB_REGISTRY="${AIB_REGISTRY:-$HOME/.aib/barracks.json}"
 
+# A barrack: agent.yaml in the folder, or the folder in the registry (made
+# before agent.yaml). Hooks are user-level and run in every Claude/Codex
+# session, so outside a barrack they must write nothing (2026-11-25: they
+# left SESSIONS.md and sessions/ in plain repos).
+_aib_is_barrack() {
+    local here="${1:-.}" logical physical
+    [ -f "$here/agent.yaml" ] && return 0
+    [ -f "$AIB_REGISTRY" ] || return 1
+    logical="$(cd "$here" 2>/dev/null && pwd)" || return 1
+    physical="$(cd "$here" 2>/dev/null && pwd -P)" || return 1
+    jq -e --arg a "$logical" --arg b "$physical" 'any(.[]?; .path == $a or .path == $b)' "$AIB_REGISTRY" >/dev/null 2>&1
+}
+
 ensure_registry() {
     mkdir -p "$HOME/.aib"
     [ -f "$AIB_REGISTRY" ] || echo '[]' > "$AIB_REGISTRY"
@@ -2624,6 +2637,9 @@ case "${1:-}" in
     start)   shift; cmd_start "$@" ;;
     hook)
         shift
+        # Outside a barrack: silent no-op (native codex checks itself: its
+        # Stop must still answer {}).
+        case "${1:-}" in start|end|continue|event) _aib_is_barrack || exit 0 ;; esac
         case "${1:-}" in
             start)    shift; cmd_hook_start "$@" ;;
             end)      shift; cmd_hook_end "$@" ;;
