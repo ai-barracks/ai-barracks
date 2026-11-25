@@ -11,8 +11,9 @@ done
 export HOME="$TMP/home" PATH="$TMP/stubs:$PATH"
 unset AIB_REGISTRY
 export AIB_CLAUDE_SETTINGS="$TMP/home/claude-settings.json" AIB_GEMINI_SETTINGS="$TMP/home/gemini-settings.json"
-# No test reaches GitHub: aib update/doctor see "offline".
-export AIB_LATEST_URL="http://127.0.0.1:9/offline"
+# No test reaches GitHub: aib update/doctor see "offline". The daily update
+# notice stays off (test_aib_update_notice.sh turns it on for itself).
+export AIB_LATEST_URL="http://127.0.0.1:9/offline" AIB_NO_UPDATE_CHECK=1
 for test in "$ROOT"/tests/*.sh; do
     [ "$(basename "$test")" = run.sh ] && continue
     echo "=== $(basename "$test") ==="

@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-AIB_VERSION="1.6.2"
+AIB_VERSION="1.6.3"
 # Use BASH_SOURCE[0] so `source bin/aib` works from any cwd
 # (AIB_SOURCE_ONLY=1 source "$AIB_BIN" is used by tests after `cd`).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -2674,6 +2674,12 @@ if [ -n "${AIB_SOURCE_ONLY:-}" ]; then return 0 2>/dev/null || true; fi
 # ============================================================
 # Main
 # ============================================================
+# A newer aib, said in a terminal (never in hooks or `aib version`, which
+# CommandCenter reads).
+case "${1:-}" in
+    start|status|init|sync|barracks|install) if declare -F _aib_update_notice >/dev/null; then _aib_update_notice; fi ;;
+esac
+
 case "${1:-}" in
     init)    shift; cmd_init "$@" ;;
     start)   shift; cmd_start "$@" ;;

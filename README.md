@@ -109,6 +109,16 @@ aib update           # 더 새 aib가 있으면 Homebrew로 업데이트(묻고 
 
 GUI 앱(CommandCenter)은 `~/.zshrc`를 읽지 않는 로그인 셸로 aib를 실행합니다. Claude 공식 설치기처럼 `~/.zshrc`에서 PATH를 잡는 도구는 앱에서 안 보였는데(새 맥에서 "claude를 못 찾음"), 1.6.2부터 aib가 설치 위치를 직접 찾습니다. 같은 프로그램이 버전이 다르게 두 군데 깔려 있으면(예: brew의 옛 Claude와 공식 설치본) `aib doctor`가 경고합니다.
 
+### 새 aib가 나온 것을 아는 방법
+
+Homebrew는 맥에 받아 둔 **tap 사본**으로만 새 버전을 압니다. 이 사본은 `brew update`가 갱신하는데, 저절로는 `brew install`·`brew upgrade` 직전에 **하루 한 번**만 갱신됩니다(`brew outdated`·`brew info`는 갱신하지 않음). 그래서 새 aib가 나와도 `brew upgrade ai-barracks`는 한동안 모를 수 있습니다. aib는 Homebrew를 기다리지 않고 **GitHub의 최신 릴리스를 직접** 봅니다.
+
+- **`aib update`·`aib doctor`**: 그 자리에서 확인합니다. `aib update`는 `brew update`부터 실행하므로 tap을 따로 갱신할 필요가 없습니다. 설치가 끝나면 실제로 바뀐 버전을 확인하고, 릴리스 직후라 tap에 아직 새 버전이 없으면 "업데이트됨"이라고 하지 않고 나중에 다시 하라고 알립니다(v1.6.3).
+- **터미널에서 `aib start`·`status`·`init`·`sync`·`barracks`·`install`**: 하루 한 번 백그라운드에서 확인하고(명령은 기다리지 않음), 새 버전이 있으면 다음 실행 때 한 줄로 알립니다 — `[WARN] aib 1.6.4 is out (installed: 1.6.3) — aib update`. hook과 `aib version`, 앱이 실행하는 aib에는 나오지 않습니다. 끄려면 `AIB_NO_UPDATE_CHECK=1`(v1.6.3).
+- **CommandCenter 2.2.1+**: 사이드바 aib 버전 아래 `aib X 업데이트` 버튼.
+- `aib doctor`는 Homebrew의 tap 사본이 GitHub보다 뒤처졌는지, 같은 이름의 formula를 가진 **옛 tap**이 남아 있는지(이때 `brew upgrade ai-barracks`는 "Formulae found in multiple taps"로 멈춤)도 보여 줍니다(v1.6.3).
+- `aib update`가 없는 1.6.1 이하에서는 처음 한 번만 `brew update && brew upgrade ai-barracks/ai-barracks/ai-barracks`(CommandCenter 버튼이 이 명령을 실행).
+
 ### 설치·업그레이드 확인
 
 공식 tap의 fully-qualified formula를 사용하고 `aib version`으로 **실제로 실행되는 CLI**를 확인하세요. 기존 `cyrok90/ai-barracks` tap 설치와 동명 formula가 충돌하면 먼저 설치 경로·설정·이전 keg를 확인하고 백업해야 합니다. CLI 업그레이드는 기존 배럭 템플릿을 자동 동기화하지 않습니다.
@@ -426,9 +436,9 @@ Slack 메시지 → barracks.json에서 키워드 매칭
 | `aib skills [list\|doctor\|check]` | 스킬 목록 조회 / 무결성 점검 / 드리프트 진단 (v1.1+, `check`는 v1.2+) |
 | `aib hook {start,end,continue}` | (내부) CLI hook에서 자동 호출 |
 | `aib version` | 버전 확인 |
-| `aib doctor` | aib·claude·codex 경로와 버전, 중복 설치, hook 상태, 최신 aib 여부 (v1.6.2) |
+| `aib doctor` | aib·claude·codex 경로와 버전, 중복 설치, hook 상태, 최신 aib 여부 (v1.6.2), Homebrew tap 사본·옛 tap (v1.6.3) |
 | `aib install <claude\|codex>` | 없는 에이전트 CLI를 공식 방법으로 설치(묻고 진행) (v1.6.2) |
-| `aib update` | 새 aib가 나왔으면 Homebrew로 업데이트(묻고 진행) (v1.6.2) |
+| `aib update` | 새 aib가 나왔으면 Homebrew로 업데이트(묻고 진행, tap 갱신 포함) (v1.6.2), 설치된 버전 확인 (v1.6.3) |
 | `aib hooks codex install [--user\|path]` | Codex hook 설치 — `--user`는 모든 배럭(전역), path는 그 프로젝트만 |
 
 ### Skills (v1.2.0+)
