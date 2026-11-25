@@ -20,8 +20,9 @@ set +e
 BR="${TMP}/barrack"
 mkdir -p "$BR/sessions"
 cp "$TEMPLATE_DIR/SESSIONS.md" "$BR/SESSIONS.md"
+touch "$(dirname "$BR/SESSIONS.md")/agent.yaml"  # a barrack (hooks act only there)
 cd "$BR" || fail "cd barrack"
-touch AGENTS.md   # native Codex hooks only act inside a barrack
+touch AGENTS.md agent.yaml   # native Codex hooks only act inside a barrack
 
 start_session() { AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook start claude 2>/dev/null; }
 end_session()   { AIB_LIVE_PID="$HOLDER" "$AIB_BIN" hook end claude >/dev/null 2>&1; }
@@ -164,6 +165,7 @@ pass "native Codex SessionStart injects the integrity report"
 # --- 11. Many issues: no SIGPIPE abort under pipefail, exit codes hold -----------
 BULK="${TMP}/bulk"; mkdir -p "$BULK/sessions/.seals"
 cp "$TEMPLATE_DIR/SESSIONS.md" "$BULK/SESSIONS.md"
+touch "$(dirname "$BULK/SESSIONS.md")/agent.yaml"  # a barrack (hooks act only there)
 zero="$(printf '0%.0s' $(seq 1 64))"
 for i in $(seq 1 2500); do
     printf -- '- **Status**: completed\n%s\n' "$i" > "$BULK/sessions/bulk-session-${i}.md"

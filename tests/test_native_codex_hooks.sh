@@ -2,7 +2,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
-cd "$TMP"; touch AGENTS.md
+cd "$TMP"; touch AGENTS.md agent.yaml
 export AIB_LIVE_PID=$$ AIB_LIVE_LSTART="test"
 hook() { jq -n --arg event "$1" --arg sid "$2" '{hook_event_name:$event,session_id:$sid}' | "$ROOT/bin/aib" hook native codex; }
 hook SessionStart one > first

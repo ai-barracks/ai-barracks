@@ -94,9 +94,20 @@ aib status
 `aib init` 한 번 실행으로:
 
 - ✅ 프로젝트 디렉토리가 AI 에이전트 워크스페이스로 변환
-- ✅ Claude Code / Gemini CLI의 `SessionStart`/`SessionEnd` hook 자동 주입 (`~/.claude/settings.json`, `~/.gemini/settings.json`)
+- ✅ Claude Code hook 자동 주입(`~/.claude/settings.json`), **Codex hook도 사용자 전역으로 설치**(`~/.codex/hooks.json`, v1.6.2) — Codex는 처음 한 번 `/hooks`에서 'aib hook native codex'를 신뢰해야 실행합니다(한 번이면 모든 배럭). `AIB_CODEX_HOOKS=0`이면 Codex hook은 건너뜁니다
+- ✅ claude·codex가 PATH에 없어도 흔한 설치 위치(`~/.local/bin`, Homebrew, npm·nvm 등)에서 찾고, 아예 없으면 터미널에서 물어본 뒤 공식 방법으로 설치(v1.6.2)
 - ✅ 글로벌 배럭 레지스트리(`~/.aib/barracks.json`) 등록
 - ✅ `CLAUDE.md`, `GEMINI.md`, `AGENTS.md`에 Session-Memory Protocol 주입
+
+### 새 맥에서 처음 쓸 때
+
+```bash
+aib doctor           # aib가 실행할 claude·codex 경로와 버전, 중복 설치, hook 상태, 최신 aib 여부
+aib install claude   # 없으면 공식 방법으로 설치(묻고 진행) — codex도 같음
+aib update           # 더 새 aib가 있으면 Homebrew로 업데이트(묻고 진행)
+```
+
+GUI 앱(CommandCenter)은 `~/.zshrc`를 읽지 않는 로그인 셸로 aib를 실행합니다. Claude 공식 설치기처럼 `~/.zshrc`에서 PATH를 잡는 도구는 앱에서 안 보였는데(새 맥에서 "claude를 못 찾음"), 1.6.2부터 aib가 설치 위치를 직접 찾습니다. 같은 프로그램이 버전이 다르게 두 군데 깔려 있으면(예: brew의 옛 Claude와 공식 설치본) `aib doctor`가 경고합니다.
 
 ### 설치·업그레이드 확인
 
@@ -415,6 +426,10 @@ Slack 메시지 → barracks.json에서 키워드 매칭
 | `aib skills [list\|doctor\|check]` | 스킬 목록 조회 / 무결성 점검 / 드리프트 진단 (v1.1+, `check`는 v1.2+) |
 | `aib hook {start,end,continue}` | (내부) CLI hook에서 자동 호출 |
 | `aib version` | 버전 확인 |
+| `aib doctor` | aib·claude·codex 경로와 버전, 중복 설치, hook 상태, 최신 aib 여부 (v1.6.2) |
+| `aib install <claude\|codex>` | 없는 에이전트 CLI를 공식 방법으로 설치(묻고 진행) (v1.6.2) |
+| `aib update` | 새 aib가 나왔으면 Homebrew로 업데이트(묻고 진행) (v1.6.2) |
+| `aib hooks codex install [--user\|path]` | Codex hook 설치 — `--user`는 모든 배럭(전역), path는 그 프로젝트만 |
 
 ### Skills (v1.2.0+)
 
@@ -543,10 +558,11 @@ CLI 외에 데스크톱 앱으로도 배럭을 관제할 수 있습니다.
 - ✏️ `SOUL.md`/`RULES.md`/`GROWTH.md`/`agent.yaml` 폼 편집 (편집 중 바깥 수정 감지)
 - 📜 History(세션 실록·Continue·터미널 출력 보관), Wiki, Skills, Council, Git
 - 🔍 ⌘K 통합 검색 (세션/위키/규칙) + 배럭 골라서 Sync
-- 🧹 **정리하고 닫기**(⇧⌘W): 에이전트에게 세션 종료 절차("끝" — Log·Decisions 마무리, Growth Audit, Wiki Extractions)를 시키고, 그 턴이 끝나면 터미널을 닫음
+- 🧹 **정리하고 닫기**(⇧⌘W): 에이전트에게 세션 종료 절차("끝" — Log·Decisions 마무리, Growth Audit, Wiki Extractions)를 시키고, 그 턴이 끝나면 터미널을 닫음(Claude·Codex 모두, CC 2.2.1부터 Codex는 hook이 없어도)
 - ⌨️ 단축키 설정(설정 › 단축키): 키 위치로 동작해 한/영 입력 상태와 무관
+- ⬆️ 앱 안 업데이트(CC 2.2.0+)와 **aib 업데이트 알림**(CC 2.2.1+): 새 aib가 나오면 사이드바 aib 버전 아래 버튼 → 터미널 칸에서 `aib update`
 
-**CC가 쓰는 aib 기능**: 에이전트는 `aib start <client>`로 띄우고, 상태(작업 중·입력 대기·완료)는 hook이 쓰는 `sessions/.live/` sidecar로 봅니다. Codex 상태는 `aib hooks codex install`을 한 배럭에서만 보입니다. 터미널을 X로 바로 닫으면 aib의 SessionEnd hook(Claude)·래퍼(Codex)가 세션 기록(SESSIONS.md·Status·Ended·봉인)은 닫지만, 에이전트가 하는 Growth Audit은 빠집니다 — 이때는 다음 세션 시작 때 `[AIB VIOLATION]`/"no Wiki Extractions" 안내로 사후 정리를 요청합니다.
+**CC가 쓰는 aib 기능**: 에이전트는 `aib start <client>`로 띄우고(CC 2.2.1부터 사용자의 터미널과 같은 PATH로 — 앱이 터미널과 다른 claude를 쓰거나 못 찾던 문제 해결, claude·codex가 없으면 aib 1.6.2가 그 칸에서 설치를 물음), 상태(작업 중·입력 대기·완료)는 hook이 쓰는 `sessions/.live/` sidecar로 봅니다. Codex 상태는 Codex hook이 설치되고(`aib init`/`aib sync`가 전역으로 설치, v1.6.2) Codex `/hooks`에서 한 번 신뢰된 뒤에 보입니다. 터미널을 X로 바로 닫으면 aib의 SessionEnd hook(Claude)·래퍼(Codex)가 세션 기록(SESSIONS.md·Status·Ended·봉인)은 닫지만, 에이전트가 하는 Growth Audit은 빠집니다 — 이때는 다음 세션 시작 때 `[AIB VIOLATION]`/"no Wiki Extractions" 안내로 사후 정리를 요청합니다.
 
 v1(Tauri v2 + React)은 [`v1` 브랜치](https://github.com/ai-barracks/ai-barracks-cc/tree/v1)와 [v1.6.1](https://github.com/ai-barracks/ai-barracks-cc/releases/tag/v1.6.1)에 있습니다.
 
@@ -572,7 +588,7 @@ v1(Tauri v2 + React)은 [`v1` 브랜치](https://github.com/ai-barracks/ai-barra
 - **macOS** *(현재 macOS 전용)*
 - **Homebrew**
 - **jq** *(자동 설치됨)*
-- Claude Code, Gemini CLI, Codex CLI 중 **하나 이상**
+- Claude Code, Codex CLI 중 **하나 이상**(Gemini CLI도 계속 지원) — claude·codex가 없으면 `aib init`·`aib start`가 물어보고 공식 방법으로 설치합니다(`aib install <claude|codex>`, v1.6.2)
 
 ---
 
@@ -606,14 +622,15 @@ v1(Tauri v2 + React)은 [`v1` 브랜치](https://github.com/ai-barracks/ai-barra
 - Council은 Claude JSON / Codex JSONL의 terminal success·exit status·timeout을 함께 확인합니다. 사용량은 해당 호출의 structured usage만 사용하고, 없으면 unavailable입니다. `AIB_COUNCIL_{CLAUDE,CODEX}_{MODEL,EFFORT}`로 override할 수 있습니다.
 - Codex native skills는 `.agents/skills`, Claude는 `.claude/skills`에 연결합니다. 사용자 directory/foreign symlink 충돌은 삭제하지 않고 중단합니다.
 
-### Codex native hooks (opt-in)
+### Codex native hooks
 
 ```bash
-aib hooks codex install /path/to/barrack
-# Codex에서 프로젝트를 trust하고 /hooks에서 정확한 hook definition을 승인
+aib hooks codex install --user          # 모든 배럭: ~/.codex/hooks.json (aib init·sync가 기본으로 설치, v1.6.2)
+aib hooks codex install /path/to/barrack  # 그 프로젝트만: .codex/hooks.json
+# 그다음 Codex에서 /hooks → 'aib hook native codex'를 한 번 신뢰
 ```
 
-지원되는 Codex에서만 적용됩니다. 설정 설치가 실행·trust를 보장하지 않으며 trust를 자동 우회하지 않습니다. 이전 CLI는 `aib start codex` wrapper를 계속 사용합니다. [공식 hooks 문서](https://learn.chatgpt.com/docs/hooks)를 확인하세요.
+Codex는 사용자 전역(`$CODEX_HOME/hooks.json`)과 프로젝트(`.codex/hooks.json`) hook을 모두 읽고, 관리되지 않는 hook은 신뢰해야 실행합니다(hook 내용의 해시로 기억하므로 내용이 바뀔 때만 다시 묻습니다). aib의 hook은 배럭(`agent.yaml`이 있거나 레지스트리에 등록된 폴더) 밖에서는 아무것도 쓰지 않습니다. 지원되는 Codex에서만 적용됩니다. 설정 설치가 실행·trust를 보장하지 않으며 trust를 자동 우회하지 않습니다. 이전 CLI는 `aib start codex` wrapper를 계속 사용합니다. [공식 hooks 문서](https://learn.chatgpt.com/docs/hooks)를 확인하세요.
 
 Native payload의 session ID로 routing하므로 같은 app-server PID의 대화들을 분리합니다. Resume/compact는 기존 로그를 보존하고 SessionStart에서 identity를 재주입합니다. SessionEnd는 3초 제한 안의 metadata 정리만 수행하며 LLM summary를 실행하지 않습니다. Stop은 Codex가 요구하는 JSON을 반환합니다. Native index lock은 1초 이내 대기 후 fail-closed합니다. 강제 종료로 `sessions/.live/native/index.lock`이 남았다면 **모든 해당 프로젝트 Codex hook 프로세스가 종료된 것을 확인한 후에만** 빈 lock directory를 제거하세요.
 

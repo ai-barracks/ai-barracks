@@ -43,7 +43,7 @@ trap cleanup_fixtures EXIT
 make_fixture() {
     local body_kind="$1"   # "real-bullet" | "parenthetical" | "comments-only" | "truly-empty"
     local dir
-    dir="$(mktemp -d)"
+    dir="$(mktemp -d)"; touch "$dir/agent.yaml"
     FIXTURES+=("$dir")
     mkdir -p "$dir/sessions"
     cat > "$dir/SESSIONS.md" <<'EOF'

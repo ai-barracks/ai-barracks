@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# aib update (2026-11-25: aib had no way to tell a newer release was out; a
+# Mac stayed on 1.3.4 from Homebrew, whose tap checkout had stopped at 1.4.0).
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+AIB="$ROOT/bin/aib"
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+fail() { echo "FAIL: $1" >&2; exit 1; }
+export HOME="$TMP/home"; mkdir -p "$HOME"
+current="$("$AIB" version | sed 's/^aib v//')"
+newer="99.0.0"
+
+# The version order is numeric (1.10.0 is newer than 1.9.9).
+AIB_SOURCE_ONLY=1 bash -c "source '$AIB'; _aib_version_lt 1.9.9 1.10.0 && ! _aib_version_lt 1.10.0 1.9.9 && ! _aib_version_lt 1.6.1 1.6.1" \
+    || fail "version order"
+
+# 1. Up to date: says so, succeeds, runs nothing.
+out="$(AIB_LATEST_VERSION="$current" AIB_UPDATE_CMD="touch '$TMP/ran'" "$AIB" update 2>&1)" || fail "up to date failed: $out"
+echo "$out" | grep -q "latest" || fail "up to date not reported: $out"
+[ ! -e "$TMP/ran" ] || fail "updated while up to date"
+
+# 2. GitHub unreachable: says so, fails.
+if AIB_LATEST_VERSION="" AIB_LATEST_URL="http://127.0.0.1:9/none" "$AIB" update >/dev/null 2>&1; then fail "unreachable GitHub reported as success"; fi
+
+# 3. Newer, Homebrew install, no terminal: shows the command, does not run it.
+export AIB_LATEST_VERSION="$newer" AIB_INSTALL_KIND=brew AIB_UPDATE_CMD="touch '$TMP/ran'"
+if out="$("$AIB" update 2>&1 </dev/null)"; then fail "update without a terminal reported success"; fi
+echo "$out" | grep -q "$newer" || fail "newer version not named: $out"
+echo "$out" | grep -q "touch" || fail "update command not shown: $out"
+[ ! -e "$TMP/ran" ] || fail "updated without asking"
+
+# 4. Newer, in a terminal: n does nothing, y runs the update.
+printf 'n\n' | AIB_ASSUME_TTY=1 "$AIB" update >/dev/null 2>&1 || true
+[ ! -e "$TMP/ran" ] || fail "updated after n"
+printf 'y\n' | AIB_ASSUME_TTY=1 "$AIB" update > "$TMP/y.log" 2>&1 || fail "update (y) failed: $(cat "$TMP/y.log")"
+[ -e "$TMP/ran" ] || fail "update command did not run after y"
+grep -q "aib sync" "$TMP/y.log" || fail "no hint to sync barracks after the update: $(cat "$TMP/y.log")"
+
+# 5. Not a Homebrew install: explains instead of guessing.
+rm -f "$TMP/ran"
+if out="$(printf 'y\n' | AIB_ASSUME_TTY=1 AIB_INSTALL_KIND=other "$AIB" update 2>&1)"; then fail "non-Homebrew update reported success"; fi
+[ ! -e "$TMP/ran" ] || fail "ran the Homebrew update on a non-Homebrew install"
+echo "$out" | grep -q "brew install ai-barracks/ai-barracks/ai-barracks" || fail "no way forward shown: $out"
+
+# 6. The Homebrew command names the official tap (an older tap may hold the same name).
+AIB_SOURCE_ONLY=1 bash -c "unset AIB_UPDATE_CMD; source '$AIB'; _aib_update_command" | grep -q "brew upgrade ai-barracks/ai-barracks/ai-barracks" \
+    || fail "update command does not name the official tap"
+
+# 7. aib doctor names a newer release.
+out="$("$AIB" doctor 2>&1 || true)"
+echo "$out" | grep -q "$newer" || fail "doctor did not name the newer aib: $out"
+
+echo "PASS: aib update (latest check, asks first, Homebrew only, official tap, sync hint, doctor)"

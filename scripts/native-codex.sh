@@ -1,14 +1,26 @@
 # Native Codex hooks. Sourced by aib; never infer identity from a shared PID.
-cmd_hooks_codex_install() (
-    local root="${1:-.}"
-    cd "$root"
+
+# Codex reads user hooks from $CODEX_HOME/hooks.json (default ~/.codex), for
+# every project: one install, and one trust in Codex /hooks, cover every
+# barrack — Claude-like (2026-11-25; the handler acts only in a barrack).
+_aib_codex_user_hooks_file() { echo "${CODEX_HOME:-$HOME/.codex}/hooks.json"; }
+
+_aib_codex_hooks_present() {
+    jq -e '[.hooks[]?[]?.hooks[]?.command] | any(. == "aib hook native codex")' "$1" >/dev/null 2>&1
+}
+
+# Add aib's handler to every event in <file>, keeping everything else. The
+# definition never changes, so Codex keeps the trust it gave it. Prints
+# "unchanged" when it was already complete. Never writes through a symlink.
+_aib_codex_hooks_write() (
+    local file="$1" dir tmp
+    dir="$(dirname "$file")"
     command -v jq >/dev/null || { log_err "jq is required"; exit 1; }
-    [ ! -L .codex ] && [ ! -L .codex/hooks.json ] || { log_err "Refusing symlinked hook configuration"; exit 1; }
-    mkdir -p .codex
-    local file=.codex/hooks.json tmp
+    [ ! -L "$file" ] || { log_err "Refusing symlinked hook configuration: $file"; exit 1; }
+    mkdir -p "$dir"
     [ -f "$file" ] || printf '{"hooks":{}}\n' > "$file"
-    jq -e 'type == "object" and ((.hooks // {}) | type == "object")' "$file" >/dev/null || { log_err "Invalid hooks.json; preserved"; exit 1; }
-    tmp=$(mktemp .codex/.hooks.XXXXXX)
+    jq -e 'type == "object" and ((.hooks // {}) | type == "object")' "$file" >/dev/null || { log_err "Invalid $file; preserved"; exit 1; }
+    tmp=$(mktemp "$dir/.hooks.XXXXXX")
     trap 'rm -f "$tmp"' EXIT
     jq 'def ensure(ev):
           .hooks[ev] = ((.hooks[ev] // []) | if any(.[]?; .hooks[]?.command == "aib hook native codex") then . else
@@ -16,10 +28,38 @@ cmd_hooks_codex_install() (
         .hooks = (.hooks // {})
         | ensure("SessionStart") | ensure("SessionEnd") | ensure("UserPromptSubmit")
         | ensure("PreToolUse") | ensure("PostToolUse") | ensure("PermissionRequest") | ensure("Stop") | ensure("Interrupt")' "$file" > "$tmp"
+    if [ "$(jq -S . "$file")" = "$(jq -S . "$tmp")" ]; then echo unchanged; exit 0; fi
     mv "$tmp" "$file"
-    log_ok "Project Codex hooks installed. Trust this project and approve the exact definitions in Codex /hooks. No trust settings were changed."
-    log_info "Older/unsupported clients: continue using aib start codex. SessionEnd records only metadata (no LLM summary)."
+    echo written
 )
+
+# aib hooks codex install [--user | path]
+cmd_hooks_codex_install() {
+    if [ "${1:-}" = --user ]; then
+        _aib_codex_install_user_hooks
+        return
+    fi
+    (
+        local root="${1:-.}" result
+        cd "$root"
+        [ ! -L .codex ] || { log_err "Refusing symlinked hook configuration"; exit 1; }
+        result="$(_aib_codex_hooks_write .codex/hooks.json)" || exit 1
+        log_ok "Project Codex hooks $result. Trust this project and approve the exact definitions in Codex /hooks. No trust settings were changed."
+        log_info "One install for every barrack instead: aib hooks codex install --user"
+    )
+}
+
+_aib_codex_install_user_hooks() {
+    local file result
+    file="$(_aib_codex_user_hooks_file)"
+    result="$(_aib_codex_hooks_write "$file")" || return 1
+    if [ "$result" = unchanged ]; then
+        log_ok "Codex hooks already set: $file"
+    else
+        log_ok "Codex hooks installed: $file (every barrack)"
+        log_info "Codex runs them once you trust them: start Codex, type /hooks, trust 'aib hook native codex' (one time). No trust settings were changed."
+    fi
+}
 
 cmd_hook_native_codex() (
     # All output except SessionStart context and Stop JSON is intentionally empty.
@@ -29,7 +69,7 @@ cmd_hook_native_codex() (
     [ "$event" != Stop ] || printf '{}\n'
     native=$(printf '%s' "$payload" | jq -er '.session_id | select(type=="string" and length>0 and length<512)' 2>/dev/null) || exit 0
     # Project hooks run in the project cwd. Refuse writes through user-controlled symlinks.
-    [ -f AGENTS.md ] || exit 0
+    _aib_is_barrack || exit 0
     for i in sessions sessions/.live sessions/.live/native SESSIONS.md; do [ ! -L "$i" ] || exit 0; done
     mkdir -p sessions/.live/native
     # Bounded project-wide serialization; hooks in one event run concurrently.

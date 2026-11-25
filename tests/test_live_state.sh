@@ -7,7 +7,7 @@ AIB_BIN="${SCRIPT_DIR}/../bin/aib"
 fail() { echo "FAIL: $1"; exit 1; }
 pass() { echo "PASS: $1"; }
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
-cd "$TMP"; mkdir -p sessions
+cd "$TMP"; mkdir -p sessions; touch agent.yaml
 
 # Source bin/aib for unit testing (requires AIB_SOURCE_ONLY guard before dispatch).
 AIB_SOURCE_ONLY=1 source "$AIB_BIN"
@@ -212,6 +212,7 @@ HB="$(mktemp -d)"
 (
   cd "$HB"
   cp "$TEMPLATE_DIR/SESSIONS.md" SESSIONS.md
+  touch "$(dirname "SESSIONS.md")/agent.yaml"  # a barrack (hooks act only there)
   mkdir -p sessions
   AIB_LIVE_PID=$$ "$AIB_BIN" hook start claude >/dev/null
   s1="$(cat sessions/.active)"
