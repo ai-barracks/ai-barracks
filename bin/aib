@@ -2674,6 +2674,12 @@ if [ -n "${AIB_SOURCE_ONLY:-}" ]; then return 0 2>/dev/null || true; fi
 # ============================================================
 # Main
 # ============================================================
+# A newer aib, said in a terminal (never in hooks or `aib version`, which
+# CommandCenter reads).
+case "${1:-}" in
+    start|status|init|sync|barracks|install) if declare -F _aib_update_notice >/dev/null; then _aib_update_notice; fi ;;
+esac
+
 case "${1:-}" in
     init)    shift; cmd_init "$@" ;;
     start)   shift; cmd_start "$@" ;;

@@ -7,6 +7,8 @@ AIB="$ROOT/bin/aib"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fail() { echo "FAIL: $1" >&2; exit 1; }
 export HOME="$TMP/home"; mkdir -p "$HOME"
+# Doctor reads Homebrew's taps from here (not this Mac's Homebrew).
+export AIB_BREW_REPOSITORY="$TMP/no-brew"
 current="$("$AIB" version | sed 's/^aib v//')"
 newer="99.0.0"
 
@@ -29,12 +31,25 @@ echo "$out" | grep -q "$newer" || fail "newer version not named: $out"
 echo "$out" | grep -q "touch" || fail "update command not shown: $out"
 [ ! -e "$TMP/ran" ] || fail "updated without asking"
 
-# 4. Newer, in a terminal: n does nothing, y runs the update.
+# 4. Newer, in a terminal: n does nothing, y runs the update. The aib on PATH
+#    afterwards (a stand-in for Homebrew's) says which version got installed.
+mkdir -p "$TMP/bin"
+printf '#!/bin/sh\nif [ -e "%s" ]; then echo "aib v%s"; else echo "aib v%s"; fi\n' "$TMP/ran" "$newer" "$current" > "$TMP/bin/aib"
+chmod +x "$TMP/bin/aib"; export PATH="$TMP/bin:$PATH"
 printf 'n\n' | AIB_ASSUME_TTY=1 "$AIB" update >/dev/null 2>&1 || true
 [ ! -e "$TMP/ran" ] || fail "updated after n"
 printf 'y\n' | AIB_ASSUME_TTY=1 "$AIB" update > "$TMP/y.log" 2>&1 || fail "update (y) failed: $(cat "$TMP/y.log")"
 [ -e "$TMP/ran" ] || fail "update command did not run after y"
 grep -q "aib sync" "$TMP/y.log" || fail "no hint to sync barracks after the update: $(cat "$TMP/y.log")"
+
+# 4b. The release is out but Homebrew's tap has not got it yet: brew says
+#     "already installed" and exits 0 — not reported as updated.
+rm -f "$TMP/ran"
+export AIB_UPDATE_CMD="true"
+if printf 'y\n' | AIB_ASSUME_TTY=1 "$AIB" update > "$TMP/lag.log" 2>&1; then fail "an update that installed nothing reported success: $(cat "$TMP/lag.log")"; fi
+grep -q "aib updated\|installed. Then" "$TMP/lag.log" && fail "said updated while still on $current: $(cat "$TMP/lag.log")"
+grep -q "$current" "$TMP/lag.log" && grep -q "later" "$TMP/lag.log" || fail "lag not explained: $(cat "$TMP/lag.log")"
+export AIB_UPDATE_CMD="touch '$TMP/ran'"
 
 # 5. Not a Homebrew install: explains instead of guessing.
 rm -f "$TMP/ran"
@@ -50,4 +65,16 @@ AIB_SOURCE_ONLY=1 bash -c "unset AIB_UPDATE_CMD; source '$AIB'; _aib_update_comm
 out="$("$AIB" doctor 2>&1 || true)"
 echo "$out" | grep -q "$newer" || fail "doctor did not name the newer aib: $out"
 
-echo "PASS: aib update (latest check, asks first, Homebrew only, official tap, sync hint, doctor)"
+# 8. aib doctor explains Homebrew's side: its copy of the tap is behind
+#    (seen 2026-11-25: stuck at 1.4.0 since October), and an older tap with
+#    the same formula makes `brew upgrade ai-barracks` ambiguous.
+BREW="$TMP/brew"
+mkdir -p "$BREW/Library/Taps/ai-barracks/homebrew-ai-barracks/Formula" "$BREW/Library/Taps/olduser/homebrew-ai-barracks/Formula"
+echo '  url "https://github.com/ai-barracks/ai-barracks/archive/refs/tags/v1.4.0.tar.gz"' > "$BREW/Library/Taps/ai-barracks/homebrew-ai-barracks/Formula/ai-barracks.rb"
+cp "$BREW/Library/Taps/ai-barracks/homebrew-ai-barracks/Formula/ai-barracks.rb" "$BREW/Library/Taps/olduser/homebrew-ai-barracks/Formula/"
+out="$(AIB_BREW_REPOSITORY="$BREW" "$AIB" doctor 2>&1 || true)"
+echo "$out" | grep -q "1.4.0" && echo "$out" | grep -q "brew update" || fail "doctor did not say Homebrew's tap copy is behind: $out"
+echo "$out" | grep -q "brew untap olduser/ai-barracks" || fail "doctor did not name the older tap: $out"
+echo "$out" | grep -q "untap ai-barracks/ai-barracks" && fail "doctor told to untap the official tap: $out"
+
+echo "PASS: aib update (latest check, asks first, Homebrew only, official tap, verified, sync hint, doctor, taps)"
