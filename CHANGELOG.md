@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.6.3] - 2026-11-25
 
 ### Added
 - **aib notices a newer aib by itself.** Homebrew only learns of a release once its local copy of the tap is refreshed (`brew update`, which it runs by itself at most once a day before `install`/`upgrade`), and aib only looked when someone ran `aib update` — so a new aib went unnoticed until the tap was refreshed by hand (2026-11-25). In a terminal, `aib start`, `status`, `init`, `sync`, `barracks` and `install` now ask GitHub at most once a day, in the background (the command never waits), and say `aib X is out (installed: Y) — aib update` on the next run. Never in hooks, in `aib version` (CommandCenter reads it) or outside a terminal; off with `AIB_NO_UPDATE_CHECK=1`. The last answer is kept in `~/.aib/latest-release`.
