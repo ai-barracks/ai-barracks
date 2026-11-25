@@ -15,6 +15,9 @@
 ### Changed
 - `aib sync` also refreshes Claude's hook events (e.g. `UserPromptSubmit` from 1.6.1) and installs Codex's user-level hooks.
 
+### Docs
+- README: "새 맥에서 처음 쓸 때" (`aib doctor`, `aib install`, `aib update`, why a GUI app's shell missed `~/.local/bin`), the new commands in the reference table, Codex hooks user-level and trusted once, requirements (missing CLIs are offered for install), and the CommandCenter section for CC 2.2.1 (same PATH as the terminal, aib update button, 정리하고 닫기 for Codex without hooks).
+
 ## [1.6.1] - 2026-11-24
 
 ### Fixed

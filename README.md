@@ -558,10 +558,11 @@ CLI 외에 데스크톱 앱으로도 배럭을 관제할 수 있습니다.
 - ✏️ `SOUL.md`/`RULES.md`/`GROWTH.md`/`agent.yaml` 폼 편집 (편집 중 바깥 수정 감지)
 - 📜 History(세션 실록·Continue·터미널 출력 보관), Wiki, Skills, Council, Git
 - 🔍 ⌘K 통합 검색 (세션/위키/규칙) + 배럭 골라서 Sync
-- 🧹 **정리하고 닫기**(⇧⌘W): 에이전트에게 세션 종료 절차("끝" — Log·Decisions 마무리, Growth Audit, Wiki Extractions)를 시키고, 그 턴이 끝나면 터미널을 닫음
+- 🧹 **정리하고 닫기**(⇧⌘W): 에이전트에게 세션 종료 절차("끝" — Log·Decisions 마무리, Growth Audit, Wiki Extractions)를 시키고, 그 턴이 끝나면 터미널을 닫음(Claude·Codex 모두, CC 2.2.1부터 Codex는 hook이 없어도)
 - ⌨️ 단축키 설정(설정 › 단축키): 키 위치로 동작해 한/영 입력 상태와 무관
+- ⬆️ 앱 안 업데이트(CC 2.2.0+)와 **aib 업데이트 알림**(CC 2.2.1+): 새 aib가 나오면 사이드바 aib 버전 아래 버튼 → 터미널 칸에서 `aib update`
 
-**CC가 쓰는 aib 기능**: 에이전트는 `aib start <client>`로 띄우고, 상태(작업 중·입력 대기·완료)는 hook이 쓰는 `sessions/.live/` sidecar로 봅니다. Codex 상태는 Codex hook이 설치되고(`aib init`/`aib sync`가 전역으로 설치, v1.6.2) Codex `/hooks`에서 한 번 신뢰된 뒤에 보입니다. 터미널을 X로 바로 닫으면 aib의 SessionEnd hook(Claude)·래퍼(Codex)가 세션 기록(SESSIONS.md·Status·Ended·봉인)은 닫지만, 에이전트가 하는 Growth Audit은 빠집니다 — 이때는 다음 세션 시작 때 `[AIB VIOLATION]`/"no Wiki Extractions" 안내로 사후 정리를 요청합니다.
+**CC가 쓰는 aib 기능**: 에이전트는 `aib start <client>`로 띄우고(CC 2.2.1부터 사용자의 터미널과 같은 PATH로 — 앱이 터미널과 다른 claude를 쓰거나 못 찾던 문제 해결, claude·codex가 없으면 aib 1.6.2가 그 칸에서 설치를 물음), 상태(작업 중·입력 대기·완료)는 hook이 쓰는 `sessions/.live/` sidecar로 봅니다. Codex 상태는 Codex hook이 설치되고(`aib init`/`aib sync`가 전역으로 설치, v1.6.2) Codex `/hooks`에서 한 번 신뢰된 뒤에 보입니다. 터미널을 X로 바로 닫으면 aib의 SessionEnd hook(Claude)·래퍼(Codex)가 세션 기록(SESSIONS.md·Status·Ended·봉인)은 닫지만, 에이전트가 하는 Growth Audit은 빠집니다 — 이때는 다음 세션 시작 때 `[AIB VIOLATION]`/"no Wiki Extractions" 안내로 사후 정리를 요청합니다.
 
 v1(Tauri v2 + React)은 [`v1` 브랜치](https://github.com/ai-barracks/ai-barracks-cc/tree/v1)와 [v1.6.1](https://github.com/ai-barracks/ai-barracks-cc/releases/tag/v1.6.1)에 있습니다.
 
@@ -587,7 +588,7 @@ v1(Tauri v2 + React)은 [`v1` 브랜치](https://github.com/ai-barracks/ai-barra
 - **macOS** *(현재 macOS 전용)*
 - **Homebrew**
 - **jq** *(자동 설치됨)*
-- Claude Code, Gemini CLI, Codex CLI 중 **하나 이상**
+- Claude Code, Codex CLI 중 **하나 이상**(Gemini CLI도 계속 지원) — claude·codex가 없으면 `aib init`·`aib start`가 물어보고 공식 방법으로 설치합니다(`aib install <claude|codex>`, v1.6.2)
 
 ---
 
